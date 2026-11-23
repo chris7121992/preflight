@@ -1,0 +1,9 @@
+{
+  "name": "preflight-wx-briefing",
+  "version": "1.0.0",
+  "description": "Advisory preflight weather briefing for the Citation XLS+: ForeFlight flight plan upload, live AWC/WPC data, surface analysis interpretation and go/no-go screening.",
+  "main": "server.js",
+  "scripts": { "start": "node server.js", "test": "node --test test/*.test.js" },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

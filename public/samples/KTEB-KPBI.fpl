@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<flight-plan xmlns="http://www8.garmin.com/xmlschemas/FlightPlan/v1">
+  <created>2026-11-23T20:00:00Z</created>
+  <waypoint-table>
+    <waypoint><identifier>KTEB</identifier><type>AIRPORT</type><country-code>K6</country-code><lat>40.850100</lat><lon>-74.060800</lon><comment /></waypoint>
+    <waypoint><identifier>SBJ</identifier><type>VOR</type><country-code>K6</country-code><lat>40.583000</lat><lon>-74.741800</lon><comment /></waypoint>
+    <waypoint><identifier>SAWED</identifier><type>INT</type><country-code>K6</country-code><lat>36.909900</lat><lon>-75.937300</lon><comment /></waypoint>
+    <waypoint><identifier>ORL</identifier><type>VOR</type><country-code>K7</country-code><lat>28.542700</lat><lon>-81.335000</lon><comment /></waypoint>
+    <waypoint><identifier>KPBI</identifier><type>AIRPORT</type><country-code>K7</country-code><lat>26.683200</lat><lon>-80.095600</lon><comment /></waypoint>
+  </waypoint-table>
+  <route>
+    <route-name>KTEB TO KPBI</route-name>
+    <flight-plan-index>1</flight-plan-index>
+    <route-point><waypoint-identifier>KTEB</waypoint-identifier><waypoint-type>AIRPORT</waypoint-type><waypoint-country-code>K6</waypoint-country-code></route-point>
+    <route-point><waypoint-identifier>SBJ</waypoint-identifier><waypoint-type>VOR</waypoint-type><waypoint-country-code>K6</waypoint-country-code></route-point>
+    <route-point><waypoint-identifier>SAWED</waypoint-identifier><waypoint-type>INT</waypoint-type><waypoint-country-code>K6</waypoint-country-code></route-point>
+    <route-point><waypoint-identifier>ORL</waypoint-identifier><waypoint-type>VOR</waypoint-type><waypoint-country-code>K7</waypoint-country-code></route-point>
+    <route-point><waypoint-identifier>KPBI</waypoint-identifier><waypoint-type>AIRPORT</waypoint-type><waypoint-country-code>K7</waypoint-country-code></route-point>
+  </route>
+</flight-plan>
