@@ -479,7 +479,7 @@ async function buildBriefing(plan, input) {
     pirepsNear.push(entry);
     if (!relevant) continue;
     if (/SEV|EXTM|EXTRM/.test(turb)) add('nogo', 'Turbulence', `PIREP: severe turbulence ${altTxt(pAlt)} near route`, `${p.acType || 'Aircraft'} reported ${turb} turbulence ${entry.ageMin} min ago, ${entry.distNm} nm from the route at ${entry.alongNm} nm. ${p.rawOb}`, p.rawOb);
-    else if (/MOD/.test(turb)) add('caution', 'Turbulence', `PIREP: ${turb} turbulence ${altTxt(pAlt)}`, `${p.acType || 'Aircraft'}, ${entry.ageMin} min ago, ${entry.distNm} nm off route at ${entry.alongNm} nm. Consider type: a heavier jet's MOD is worse for an XLS+. ${p.rawOb}`, p.rawOb);
+    else if (/MOD/.test(turb)) add('caution', 'Turbulence', `PIREP: ${turb} turbulence ${altTxt(pAlt)}`, `${p.acType || 'Aircraft'}, ${entry.ageMin} min ago, ${entry.distNm} nm off route at ${entry.alongNm} nm. ${typeNote(p.acType)}${p.rawOb}`, p.rawOb);
     if (/SEV/.test(ice)) add('nogo', 'Icing', `PIREP: severe icing ${altTxt(pAlt)}`, `${p.acType || 'Aircraft'}, ${entry.ageMin} min ago, ${entry.distNm} nm off route. ${p.rawOb}`, p.rawOb);
     else if (/MOD/.test(ice)) add('caution', 'Icing', `PIREP: ${ice} icing ${altTxt(pAlt)}`, `${p.acType || 'Aircraft'}, ${entry.ageMin} min ago, ${entry.distNm} nm off route at ${entry.alongNm} nm (your altitude there ~${Math.round(smp.alt)} ft, ${smp.phase}). ${p.rawOb}`, p.rawOb);
   }
@@ -587,6 +587,13 @@ async function buildBriefing(plan, input) {
   };
 }
 
+// Turbulence felt depends on aircraft size relative to the XLS+ (~20,000 lb).
+function typeNote(ac) {
+  const t = String(ac || '').toUpperCase();
+  if (/^(A3[0-9]|A2[0-9]|B7[0-9]|B3[0-9]|A21|A20|B38|B39|B73|B75|B76|B77|B78|MD|E19|E29|BCS|A22)/.test(t)) return 'Reported by a much heavier airliner, so expect it to feel stronger in the XLS+. ';
+  if (/^(C1[0-9]{2}|C2[0-9]{2}|PA|P46|SR2|BE[0-9]|M20|DA4|C82|PC12|TBM|C25A|C25B|C510|E50|E55P|SF50)/.test(t)) return 'Reported by a lighter aircraft, so it may feel somewhat lighter in the XLS+. ';
+  return '';
+}
 function altTxt(a) { return !a ? 'altitude unknown' : a >= 18000 ? 'FL' + Math.round(a / 100) : a.toLocaleString('en-US') + ' ft'; }
 function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 const LEVEL_ORDER = { nogo: 0, caution: 1, info: 2, ok: 3 };
