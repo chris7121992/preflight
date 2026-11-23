@@ -28,6 +28,8 @@ jobs:
         run: npm run build
 
       - name: Pull weather snapshot
+        env:
+          SITE_URL: https://preflight-29da3.web.app
         run: node scripts/snapshot.js
 
       - name: Deploy to Firebase Hosting

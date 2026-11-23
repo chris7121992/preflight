@@ -66,11 +66,12 @@ async function snapSource(key, fn) {
   return fn();
 }
 const inBox = (p, b) => p.lat >= b.minLat && p.lat <= b.maxLat && p.lon >= b.minLon && p.lon <= b.maxLon;
-const idMatch = (x, set) => set.has(x.icaoId) || (x.faaId && set.has(x.faaId)) || (x.iataId && set.has(x.iataId));
+const idMatch = (x, set) => set.has(x.icaoId) || (x.faaId && set.has(x.faaId)) || (x.iataId && set.has(x.iataId)) || (x.aliases || []).some((a) => set.has(a));
 const snapAwc = {
   metar: (ids) => snapSource('metars', async () => (await snap('metars.json')).filter((m) => ids.includes(m.icaoId))),
   metarBbox: (b) => snapSource('metars', async () => (await snap('metars.json')).filter((m) => inBox(m, b))),
   taf: (ids) => snapSource('tafs', async () => (await snap('tafs.json')).filter((t) => ids.includes(t.icaoId))),
+  tafBbox: (b) => snapSource('tafs', async () => (await snap('tafs.json')).filter((t) => inBox(t, b))),
   airport: async (ids) => { const set = new Set(ids); return (await snap('airports.json')).filter((a) => idMatch(a, set)); },
   navaid: async (ids) => { const all = await snap('navaids.json'); return ids.map((id) => all.filter((n) => n.id === id).sort((a, b) => (b.country === 'US') - (a.country === 'US'))[0]).filter(Boolean); },
   fix: async () => [],
@@ -91,6 +92,7 @@ const liveAwc = {
   metar: (ids) => get(`${AWC}/metar?ids=${ids.join(',')}&format=json&hours=3`),
   metarBbox: (b) => get(`${AWC}/metar?bbox=${bboxStr(b)}&format=json`),
   taf: (ids) => get(`${AWC}/taf?ids=${ids.join(',')}&format=json`),
+  tafBbox: (b) => get(`${AWC}/taf?bbox=${bboxStr(b)}&format=json`),
   airport: (ids) => get(`${AWC}/airport?ids=${ids.join(',')}&format=json`, { ttlMs: 864e5 }),
   navaid: (ids) => get(`${AWC}/navaid?ids=${ids.join(',')}&format=json`, { ttlMs: 864e5 }),
   fix: (ids) => get(`${AWC}/fix?ids=${ids.join(',')}&format=json`, { ttlMs: 864e5 }),
@@ -139,15 +141,63 @@ function nearestLevel(ft) {
   const p = altToHpa(ft);
   return PRESSURE_LEVELS.reduce((a, b) => (Math.abs(b - p) < Math.abs(a - p) ? b : a));
 }
+// Bilinear interpolation of the snapshot's 5-degree GFS grid into the same shape as Open-Meteo's point response.
+async function windsFromGrid(points, levels) {
+  const g = await snap('winds.json');
+  const idx = new Map(g.points.map((p, i) => [`${p.lat},${p.lon}`, i]));
+  const keys = levels.flatMap((l) => [`wind_speed_${l}hPa`, `wind_direction_${l}hPa`, `temperature_${l}hPa`]).concat('freezing_level_height')
+    .filter((k) => k in g.points[0]);
+  const rad = Math.PI / 180;
+  return points.map((p) => {
+    const la0 = Math.floor(p.lat / g.step) * g.step, lo0 = Math.floor(p.lon / g.step) * g.step;
+    const corners = [[la0, lo0], [la0, lo0 + g.step], [la0 + g.step, lo0], [la0 + g.step, lo0 + g.step]];
+    const fy = (p.lat - la0) / g.step, fx = (p.lon - lo0) / g.step;
+    const w = [(1 - fy) * (1 - fx), (1 - fy) * fx, fy * (1 - fx), fy * fx];
+    const cs = corners.map(([a, b]) => g.points[idx.get(`${a},${b}`)]);
+    if (cs.some((c) => !c)) {
+      // outside the grid: nearest point
+      const n = g.points.reduce((best, q) => (Math.hypot(q.lat - p.lat, q.lon - p.lon) < Math.hypot(best.lat - p.lat, best.lon - p.lon) ? q : best));
+      cs.fill(n); w.fill(0.25);
+    }
+    const hourly = { time: g.times.map((t) => new Date(t).toISOString().slice(0, 16)) };
+    for (const k of keys) {
+      if (k.startsWith('wind_direction')) continue;
+      hourly[k] = g.times.map((_, ti) => cs.reduce((acc, c, ci) => (acc == null || c[k][ti] == null ? null : acc + w[ci] * c[k][ti]), 0));
+    }
+    // average wind as vectors so directions blend correctly
+    for (const l of levels) {
+      const sk = `wind_speed_${l}hPa`, dk = `wind_direction_${l}hPa`;
+      if (!(sk in g.points[0])) continue;
+      hourly[dk] = []; hourly[sk] = [];
+      g.times.forEach((_, ti) => {
+        let u = 0, v = 0;
+        cs.forEach((c, ci) => { const s = c[sk][ti], d = c[dk][ti]; if (s != null && d != null) { u += w[ci] * s * Math.sin(d * rad); v += w[ci] * s * Math.cos(d * rad); } });
+        hourly[sk].push(Math.hypot(u, v));
+        hourly[dk].push((Math.atan2(u, v) / rad + 360) % 360);
+      });
+    }
+    return { latitude: p.lat, longitude: p.lon, hourly, source: 'grid' };
+  });
+}
+
 async function windsAloft(points, cruiseFt) {
   const lvl = nearestLevel(cruiseFt);
   const levels = [...new Set([lvl, 300, 500, 700, 850])];
   const vars = levels.flatMap((l) => [`wind_speed_${l}hPa`, `wind_direction_${l}hPa`, `temperature_${l}hPa`, `geopotential_height_${l}hPa`]);
   const url = `https://api.open-meteo.com/v1/gfs?latitude=${points.map((p) => p.lat.toFixed(2)).join(',')}&longitude=${points.map((p) => p.lon.toFixed(2)).join(',')}&hourly=${vars.join(',')},freezing_level_height&wind_speed_unit=kn&forecast_days=3&timezone=GMT`;
-  const raw = await get(url, { ttlMs: 900e3 });
-  const arr = Array.isArray(raw) ? raw : [raw];
-  if (arr[0] && arr[0].error) throw new Error(arr[0].reason || 'Open-Meteo error');
-  return { level: lvl, levels, data: arr };
+  try {
+    const raw = await get(url, { ttlMs: 900e3 });
+    const arr = Array.isArray(raw) ? raw : [raw];
+    if (arr[0] && arr[0].error) throw new Error(arr[0].reason || 'Open-Meteo error');
+    return { level: lvl, levels, data: arr, source: 'GFS point forecast (Open-Meteo)' };
+  } catch (e) {
+    if (!config.snapshot) throw e;
+    const grid = await windsFromGrid(points, levels);
+    const nearest = (l) => [850, 700, 500, 400, 300, 250, 200, 150].reduce((a, b) => (Math.abs(b - l) < Math.abs(a - l) ? b : a));
+    // grid has a fixed level set: map the requested cruise level to the nearest available one
+    const lvlG = nearest(lvl);
+    return { level: lvlG, levels, data: grid, source: `GFS 5° grid from the refresh job (live request failed: ${e.message})` };
+  }
 }
 
 // Optional: FAA NOTAM API (requires free credentials from api.faa.gov).

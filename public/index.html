@@ -53,10 +53,13 @@
 
     <section id="results" hidden>
       <div id="verdict" class="card verdict"></div>
-      <div class="two">
-        <div class="card"><h2>Route map</h2><div id="map"></div><div class="legend" id="legend"></div></div>
-        <div class="card"><h2>Factors</h2><div id="factors"></div></div>
+      <div class="card">
+        <div class="maphead"><h2>Surface analysis map</h2><div id="mapModes" class="modes"></div></div>
+        <div id="mapTimeWrap" class="timebar" hidden><input type="range" id="mapTime" min="0" max="100" value="0" aria-label="Time during flight"><span id="mapTimeLabel"></span></div>
+        <div id="map"></div>
+        <p id="mapCaption" class="hint"></p>
       </div>
+      <div class="card"><h2>Factors</h2><div id="factors"></div></div>
       <div class="card"><h2>Surface analysis</h2><div id="surface"></div><div id="charts" class="charts"></div></div>
       <div class="card"><h2>Terminals</h2><div id="terminals" class="terms"></div></div>
       <div class="card"><h2>Winds and temperatures aloft</h2><div id="winds"></div></div>
@@ -72,6 +75,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script src="config.js"></script>
   <script src="engine.js"></script>
+  <script src="map.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -21,7 +21,7 @@ async function resolveRoute(plan, errors) {
     const ids = [...new Set(missing.map((w) => w.id))];
     const found = new Map();
     const ap = await wx.safe('airport lookup', () => wx.awc.airport(ids.filter((i) => i.length >= 3)), errors);
-    for (const a of ap || []) for (const k of [a.icaoId, a.faaId, a.iataId]) if (k) found.set(k, { lat: a.lat, lon: a.lon, type: 'AIRPORT' });
+    for (const a of ap || []) for (const k of [a.icaoId, a.faaId, a.iataId, ...(a.aliases || [])]) if (k && !found.has(k)) found.set(k, { lat: a.lat, lon: a.lon, type: 'AIRPORT' });
     const rest = ids.filter((i) => !found.has(i));
     if (rest.length) {
       const nv = await wx.safe('navaid lookup', () => wx.awc.navaid(rest.filter((i) => i.length <= 3)), errors);
@@ -240,16 +240,56 @@ async function buildBriefing(plan, input) {
   const add = (level, category, title, detail, where) => factors.push({ level, category, title, detail, where: where || null });
   // level: 'nogo' | 'caution' | 'info' | 'ok'
 
-  const byId = (arr, id) => (arr || []).find((x) => x.icaoId === id || x.faaId === id || x.iataId === id);
+  const byId = (arr, id) => (arr || []).find((x) => x.icaoId === id || x.faaId === id || x.iataId === id || (x.aliases || []).includes(id));
   const aptInfo = {};
   for (const id of airports) aptInfo[id] = byId(apts, id) || null;
+
+  // Which station actually reports weather for each airport? Identifiers change (e.g. KPBI became KDJT),
+  // so try the airport's other identifiers, then the nearest reporting station within 30 nm.
+  let metarsAll = metars || [], tafsAll = tafs || [];
+  const reporting = {};
+  const hasWx = (sid) => metarsAll.some((m) => m.icaoId === sid) || tafsAll.some((t) => t.icaoId === sid);
+  const aliasIds = [];
+  for (const id of airports) {
+    const a = aptInfo[id];
+    if (!hasWx(id) && a) for (const al of [a.icaoId, ...(a.aliases || [])]) if (al && al !== id && /^[A-Z0-9]{3,4}$/.test(al)) aliasIds.push(al);
+  }
+  if (aliasIds.length) {
+    const [m2, t2] = await Promise.all([wx.safe('METAR', () => wx.awc.metar(aliasIds), errors), wx.safe('TAF', () => wx.awc.taf(aliasIds), errors)]);
+    metarsAll = metarsAll.concat(m2 || []);
+    tafsAll = tafsAll.concat(t2 || []);
+  }
+  for (const id of airports) {
+    const a = aptInfo[id];
+    const cands = [id, ...(a ? [a.icaoId, ...(a.aliases || [])] : [])].filter(Boolean);
+    const mId = cands.find((c) => metarsAll.some((m) => m.icaoId === c));
+    const tId = cands.find((c) => tafsAll.some((t) => t.icaoId === c));
+    reporting[id] = { metarId: mId || null, tafId: tId || null, nearby: false };
+    if ((!mId || !tId) && a && isFinite(a.lat)) {
+      const box = { minLat: a.lat - 0.6, maxLat: a.lat + 0.6, minLon: a.lon - 0.8, maxLon: a.lon + 0.8 };
+      const [nm, nt] = await Promise.all([
+        !mId ? wx.safe('METAR', () => wx.awc.metarBbox(box), errors) : null,
+        !tId && wx.awc.tafBbox ? wx.safe('TAF', () => wx.awc.tafBbox(box), errors) : null,
+      ]);
+      const near = (list) => (list || []).map((x) => ({ x, d: geo.distNm(a, x) })).filter((o) => o.d <= 30 && isFinite(o.d)).sort((p, q) => p.d - q.d)[0];
+      const bm = near(nm), bt = near(nt);
+      if (bm) { metarsAll.push(bm.x); reporting[id].metarId = bm.x.icaoId; reporting[id].nearby = true; reporting[id].metarDist = Math.round(bm.d); }
+      if (bt) { tafsAll.push(bt.x); reporting[id].tafId = bt.x.icaoId; reporting[id].nearby = true; reporting[id].tafDist = Math.round(bt.d); }
+    }
+  }
 
   // Station analysis (departure at ETD, destination & alternate at ETA)
   const stations = [];
   const analyzeStation = (id, role, tMs) => {
-    const metarList = (metars || []).filter((m) => m.icaoId === id).sort((a, b) => b.obsTime - a.obsTime);
+    const rep = reporting[id] || {};
+    const metarList = metarsAll.filter((m) => m.icaoId === (rep.metarId || id)).sort((a, b) => b.obsTime - a.obsTime);
     const metar = metarList[0] || null;
-    const taf = (tafs || []).filter((t) => t.icaoId === id).sort((a, b) => b.issueTime > a.issueTime ? 1 : -1)[0] || null;
+    const taf = tafsAll.filter((t) => t.icaoId === (rep.tafId || id)).sort((a, b) => b.issueTime > a.issueTime ? 1 : -1)[0] || null;
+    const repNote = [rep.metarId && rep.metarId !== id ? `METAR from ${rep.metarId}${rep.metarDist != null ? ` (${rep.metarDist} nm away)` : ''}` : '', rep.tafId && rep.tafId !== id ? `TAF from ${rep.tafId}${rep.tafDist != null ? ` (${rep.tafDist} nm away)` : ''}` : ''].filter(Boolean).join(', ');
+    if (repNote) {
+      if (rep.nearby) add(role === 'departure' ? 'info' : 'caution', 'Data', `${id}: using a nearby station's weather`, `${id} has no report of its own, so this uses ${repNote}. Nearby observations can differ from the field (terrain, sea breeze, fog). ${role === 'alternate' ? 'An alternate generally needs its own TAF to be legal under 91.169/135.221; confirm before filing it.' : 'Get the ATIS/AWOS before relying on it.'}`, id);
+      else add('info', 'Data', `${id} reports weather as ${rep.metarId || rep.tafId}`, `The airport's weather is published under another identifier (${repNote}). ForeFlight or older databases may still use ${id}.`, id);
+    }
     const win = role === 'departure' ? [tMs - 30 * 60e3, tMs + 60 * 60e3] : [tMs - 3600e3, tMs + 3600e3];
     const periods = dec.tafWindow(taf, win[0], win[1]);
     const prevailing = periods.filter((p) => !p.temporary);
@@ -264,7 +304,7 @@ async function buildBriefing(plan, input) {
       cur = { raw: metar.rawOb, ceiling: ceil, vis, wind: dec.windOf(metar), temp: metar.temp, dewp: metar.dewp, flags: dec.wxFlags(metar.wxString), category: dec.flightCategory(ceil, vis), obsTime: new Date(metar.obsTime * 1000).toISOString(), altim: metar.altim };
     }
     const apt = aptInfo[id];
-    const station = { id, role, name: (apt && apt.name) || (metar && metar.name) || id, timeOfInterest: new Date(tMs).toISOString(), window: win.map((x) => new Date(x).toISOString()), metar: cur, taf: taf ? taf.rawTAF : null, tafPeriods: periods, forecast: taf ? { prevailing: worstPrev, worst: worstAll } : null, runway: null, elev: apt ? apt.elev : metar ? metar.elev : null };
+    const station = { id, role, reportingAs: repNote || null, name: (apt && apt.name) || (metar && metar.name) || id, timeOfInterest: new Date(tMs).toISOString(), window: win.map((x) => new Date(x).toISOString()), metar: cur, taf: taf ? taf.rawTAF : null, tafPeriods: periods, forecast: taf ? { prevailing: worstPrev, worst: worstAll } : null, runway: null, elev: apt ? apt.elev : metar ? metar.elev : null };
 
     // Conditions to judge: forecast window (or METAR if close in / no TAF)
     const cond = taf && periods.length && !useMetar ? worstPrev : cur ? { ceiling: cur.ceiling, vis: cur.vis, flags: cur.flags, spd: cur.wind.spd, gust: cur.wind.gst, category: cur.category } : null;
@@ -536,6 +576,7 @@ async function buildBriefing(plan, input) {
     pireps: pirepsNear,
     enroute,
     winds,
+    windsSource: wa ? wa.source : null,
     range: rangeCheck,
     surface,
     charts: wx.wpc.charts(),

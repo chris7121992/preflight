@@ -85,6 +85,7 @@ function metarsFromXml(xml) {
     wdir: wdir(val(b, 'wind_dir_degrees')), wspd: num(val(b, 'wind_speed_kt')), wgst: num(val(b, 'wind_gust_kt')),
     visib: val(b, 'visibility_statute_mi'),
     altim: num(val(b, 'altim_in_hg')),
+    slp: num(val(b, 'sea_level_pressure_mb')),
     wxString: val(b, 'wx_string'),
     clouds: sky(b), vertVis: num(val(b, 'vert_vis_ft')),
     fltCat: val(b, 'flight_category'),
@@ -147,7 +148,10 @@ function airportsFromOurAirports(apText, rwText) {
     const type = a(r, 'type');
     if (!['large_airport', 'medium_airport', 'small_airport'].includes(type)) continue;
     const ident = a(r, 'ident');
+    const kw = (a(r, 'keywords') || '').split(/[,\s]+/).filter((k) => /^[A-Z][A-Z0-9]{2,3}$/.test(k));
+    const aliases = [...new Set([ident, a(r, 'icao_code'), a(r, 'gps_code'), a(r, 'local_code'), ...kw].filter(Boolean))];
     byIdent.set(ident, {
+      aliases,
       icaoId: a(r, 'icao_code') || a(r, 'gps_code') || ident, faaId: a(r, 'local_code') || null, iataId: a(r, 'iata_code') || null,
       name: a(r, 'name'), lat: num(a(r, 'latitude_deg')), lon: num(a(r, 'longitude_deg')), elev: num(a(r, 'elevation_ft')) != null ? Math.round(num(a(r, 'elevation_ft')) * 0.3048) : null,
       runways: [],
@@ -174,6 +178,28 @@ function navaidsFromOurAirports(text) {
   return rows.slice(1).filter((r) => ['VOR', 'VORTAC', 'VOR-DME', 'TACAN', 'NDB', 'NDB-DME', 'DME'].includes(g(r, 'type')))
     .map((r) => ({ id: g(r, 'ident'), type: g(r, 'type'), name: g(r, 'name'), lat: num(g(r, 'latitude_deg')), lon: num(g(r, 'longitude_deg')), country: g(r, 'iso_country') }))
     .filter((n) => n.lat != null);
+}
+
+// ---------------------------------------------------------------- winds aloft grid
+const WIND_LEVELS = [850, 700, 500, 400, 300, 250, 200, 150];
+async function windsGrid() {
+  const pts = [];
+  for (let lat = 20; lat <= 55; lat += 5) for (let lon = -130; lon <= -60; lon += 5) pts.push({ lat, lon });
+  const vars = WIND_LEVELS.flatMap((l) => [`wind_speed_${l}hPa`, `wind_direction_${l}hPa`, `temperature_${l}hPa`]).concat('freezing_level_height');
+  const url = `https://api.open-meteo.com/v1/gfs?latitude=${pts.map((p) => p.lat).join(',')}&longitude=${pts.map((p) => p.lon).join(',')}&hourly=${vars.join(',')}&wind_speed_unit=kn&forecast_hours=30&timezone=GMT`;
+  const raw = JSON.parse((await fetchBuf(url)).toString('utf8'));
+  const arr = Array.isArray(raw) ? raw : [raw];
+  if (arr[0] && arr[0].error) throw new Error(arr[0].reason);
+  const times = arr[0].hourly.time.map((t) => Date.parse(t + 'Z'));
+  const round = (a) => (a || []).map((v) => (v == null ? null : Math.round(v)));
+  return {
+    generatedAt: new Date().toISOString(), step: 5, levels: WIND_LEVELS, times,
+    points: arr.map((d) => {
+      const h = d.hourly, o = { lat: Math.round(d.latitude), lon: Math.round(d.longitude) };
+      for (const k of vars) o[k] = round(h[k]);
+      return o;
+    }),
+  };
 }
 
 // ---------------------------------------------------------------- main
@@ -205,6 +231,24 @@ async function main() {
     job('codsrp', async () => { const t = await fetchText('https://tgftp.nws.noaa.gov/data/raw/fs/fsus02.kwbc.cod.srp.txt'); write('codsrp.txt', t); return t.length; }),
   ]);
 
+  // In CI the checkout is fresh, so reuse the slow-changing files already published on the site.
+  if (process.env.SITE_URL) {
+    for (const f of ['winds.json', 'airports.json', 'navaids.json']) {
+      const dest = path.join(OUT, f);
+      if (fs.existsSync(dest)) continue;
+      try {
+        const b = await fetchBuf(`${process.env.SITE_URL}/data/${f}`, 1);
+        fs.writeFileSync(dest, b);
+        if (f !== 'winds.json') {
+          // keep the weekly refresh cycle: date the copy by the published meta, if known
+          const m = JSON.parse((await fetchBuf(`${process.env.SITE_URL}/data/meta.json`, 1)).toString('utf8'));
+          const at = m.sources && m.sources.airports && Date.parse(m.sources.airports.at);
+          if (at) fs.utimesSync(dest, new Date(at), new Date(at));
+        }
+      } catch { /* first run, or site unreachable: fetch fresh below */ }
+    }
+  }
+
   // Static reference data: refresh weekly or when missing
   const apFile = path.join(OUT, 'airports.json');
   const stale = !fs.existsSync(apFile) || Date.now() - fs.statSync(apFile).mtimeMs > STATIC_MAX_AGE_H * 3600e3 || process.argv.includes('--refresh-static');
@@ -219,7 +263,16 @@ async function main() {
     });
   } else {
     meta.sources.airports = { ok: true, at: new Date(fs.statSync(apFile).mtimeMs).toISOString(), cached: true };
+    if (!fs.existsSync(path.join(OUT, 'navaids.json'))) meta.sources.airports.note = 'navaids missing';
   }
+
+  // Winds aloft grid (GFS via Open-Meteo), used when the browser can't reach Open-Meteo directly.
+  // GFS updates every 6 h, so refresh this every 3 h to stay well inside Open-Meteo's free limits.
+  const wFile = path.join(OUT, 'winds.json');
+  const wPrev = fs.existsSync(wFile) ? JSON.parse(fs.readFileSync(wFile, 'utf8')) : null;
+  if (!wPrev || Date.now() - Date.parse(wPrev.generatedAt) > 3 * 3600e3 || process.argv.includes('--refresh-winds')) {
+    await job('winds', async () => { const g = await windsGrid(); write('winds.json', g); return g.points.length; });
+  } else meta.sources.winds = { ok: true, at: wPrev.generatedAt, cached: true };
 
   write('meta.json', meta);
   const failed = Object.entries(meta.sources).filter(([, v]) => !v.ok).map(([k]) => k);
@@ -229,4 +282,4 @@ async function main() {
 }
 
 if (require.main === module) main();
-module.exports = { metarsFromXml, tafsFromXml, pirepsFromCsv, airportsFromOurAirports, navaidsFromOurAirports, csvRows };
+module.exports = { windsGrid, metarsFromXml, tafsFromXml, pirepsFromCsv, airportsFromOurAirports, navaidsFromOurAirports, csvRows };

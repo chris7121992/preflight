@@ -140,7 +140,7 @@ function centerMotion(c, kind, analysis, prog) {
     if (d < 600 && (!best || d < best.d)) best = { d, q };
   }
   if (!best) return null;
-  return { speedKt: Math.round(best.d / hrs), towardCompass: geo.compass(geo.bearing(c, best.q)), pressureTrend: best.q.pressure - c.pressure, hours: hrs };
+  return { speedKt: Math.round(best.d / hrs), towardDeg: Math.round(geo.bearing(c, best.q)), towardCompass: geo.compass(geo.bearing(c, best.q)), pressureTrend: best.q.pressure - c.pressure, hours: hrs };
 }
 
 const FRONT_NAMES = { COLD: 'cold front', WARM: 'warm front', STNRY: 'stationary front', OCFNT: 'occluded front', TROF: 'surface trough', DRYLN: 'dry line', SQLN: 'squall line' };
@@ -234,9 +234,14 @@ function interpretRoute(sections, samples, opts = {}) {
     available: true,
     analysisValid: analysis.valid ? analysis.valid.toISOString() : null,
     progs: progs.map((p) => ({ label: p.label, valid: p.valid ? p.valid.toISOString() : null, fronts: p.fronts, highs: p.highs, lows: p.lows })),
-    analysisFronts: analysis.fronts,
-    analysisHighs: analysis.highs,
-    analysisLows: analysis.lows,
+    // Every analysed feature with its motion, for drawing frontal symbols on the motion side and projecting positions.
+    analysisFronts: analysis.fronts.map((f) => {
+      const mid = f.points[Math.floor(f.points.length / 2)];
+      const m = f.points.length ? frontMotion(f, mid, analysis, prog12) : null;
+      return { ...f, motion: m ? { speedKt: m.speedKt, towardDeg: m.towardDeg, vx: m.vx, vy: m.vy } : null };
+    }),
+    analysisHighs: analysis.highs.map((c) => ({ ...c, motion: centerMotion(c, 'H', analysis, prog12) })),
+    analysisLows: analysis.lows.map((c) => ({ ...c, motion: centerMotion(c, 'L', analysis, prog12) })),
     fronts,
     centers,
   };

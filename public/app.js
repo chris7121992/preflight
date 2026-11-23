@@ -116,52 +116,8 @@ function renderFactors(b) {
     : '<p>No significant factors found.</p>';
 }
 
-const FRONT_COLOR = { COLD: '#1f5fd6', WARM: '#d62b1f', STNRY: '#8a5cd6', OCFNT: '#a03cc8', TROF: '#d68a1f', DRYLN: '#8b5a2b', SQLN: '#d6331f' };
 function renderMap(b) {
-  if (!window.L) { $('map').innerHTML = '<p class="hint">Map library failed to load.</p>'; return; }
-  if (!map) {
-    map = L.map('map', { worldCopyJump: true });
-    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', { attribution: 'Tiles © Esri, HERE, Garmin, © OpenStreetMap contributors', maxZoom: 12 }).addTo(map);
-  }
-  if (layers) layers.remove();
-  layers = L.layerGroup().addTo(map);
-  const route = b.plan.route.map((w) => [w.lat, w.lon]);
-  // Hazard polygons
-  for (const h of b.hazards) {
-    const color = /CONVECTIVE|TS/.test(h.hazard) ? '#d6331f' : /ICE/.test(h.hazard) ? '#1f9bd6' : /TURB/.test(h.hazard) ? '#d68a1f' : '#7a7a7a';
-    L.polygon(h.coords.map((c) => [c.lat, c.lon]), { color, weight: 1.5, fillOpacity: 0.12 }).bindPopup(`<b>${esc(h.label)}</b><br>${h.base != null ? `Base ${h.base}` : ''} ${h.top ? `Top ${h.top}` : ''}<br>Route at ${h.alongNm} nm ~${z(h.at)}${h.raw ? `<pre style="white-space:pre-wrap;max-width:320px">${esc(h.raw)}</pre>` : ''}`).addTo(layers);
-  }
-  // Fronts (current analysis)
-  const sf = b.surface || {};
-  for (const f of sf.analysisFronts || []) {
-    if (f.points.length < 2) continue;
-    L.polyline(f.points.map((p) => [p.lat, p.lon]), { color: FRONT_COLOR[f.type] || '#555', weight: f.type === 'TROF' ? 2 : 3.5, dashArray: f.type === 'TROF' ? '6 6' : f.type === 'STNRY' ? '12 6' : null, opacity: 0.85 }).bindTooltip(`${f.type} (analysis ${z(sf.analysisValid)})`).addTo(layers);
-  }
-  // 12h prog fronts, faded
-  const prog = (sf.progs || [])[0];
-  if (prog) for (const f of prog.fronts) {
-    if (f.points.length < 2) continue;
-    L.polyline(f.points.map((p) => [p.lat, p.lon]), { color: FRONT_COLOR[f.type] || '#555', weight: 2, dashArray: '2 6', opacity: 0.6 }).bindTooltip(`${f.type} (${prog.label}, ${z(prog.valid)})`).addTo(layers);
-  }
-  for (const [list, kind] of [[sf.analysisHighs || [], 'H'], [sf.analysisLows || [], 'L']]) {
-    for (const c of list) {
-      L.marker([c.lat, c.lon], { icon: L.divIcon({ className: '', html: `<div style="font:800 18px system-ui;color:${kind === 'H' ? '#1f5fd6' : '#d62b1f'};text-shadow:0 0 3px #fff">${kind}<div style="font:600 10px system-ui;color:#333">${c.pressure}</div></div>`, iconSize: [30, 30], iconAnchor: [10, 12] }) }).addTo(layers);
-    }
-  }
-  // Route
-  L.polyline(route, { color: '#111', weight: 3 }).addTo(layers);
-  for (const w of b.plan.route) L.circleMarker([w.lat, w.lon], { radius: 4, color: '#111', fillColor: '#fff', fillOpacity: 1, weight: 2 }).bindTooltip(w.id, { permanent: b.plan.route.length <= 12, direction: 'right', className: '' }).addTo(layers);
-  // METARs
-  const CAT = { VFR: '#1d7a45', MVFR: '#2b62c4', IFR: '#c0392b', LIFR: '#a52a9d' };
-  for (const m of b.enroute) L.circleMarker([m.lat, m.lon], { radius: 5, color: CAT[m.cat] || '#888', fillColor: CAT[m.cat] || '#888', fillOpacity: 0.85, weight: 1 }).bindPopup(`<code>${esc(m.raw)}</code>`).addTo(layers);
-  // PIREPs
-  for (const p of b.pireps) {
-    const sev = /SEV/.test(p.turb + p.ice) ? '#b3261e' : /MOD/.test(p.turb + p.ice) ? '#d68a1f' : '#6b7a8a';
-    L.circleMarker([p.lat, p.lon], { radius: 4, color: sev, fillColor: sev, fillOpacity: 1, weight: 1 }).bindPopup(`<b>PIREP</b> ${esc(p.ac || '')} ${altStr(p.alt)}<br><code>${esc(p.raw)}</code>`).addTo(layers);
-  }
-  map.fitBounds(L.latLngBounds(route).pad(0.25));
-  setTimeout(() => map.invalidateSize(), 100);
-  $('legend').innerHTML = [['COLD', 'Cold front'], ['WARM', 'Warm front'], ['OCFNT', 'Occluded'], ['STNRY', 'Stationary'], ['TROF', 'Trough']].map(([k, n]) => `<span><i style="background:${FRONT_COLOR[k]}"></i>${n}</span>`).join('') + '<span>Dotted = 12 h prog · dots = METAR category / PIREPs · shaded = advisories on route</span>';
+  if (window.SurfaceMap) window.SurfaceMap.render(b).catch((e) => console.error(e));
 }
 
 function renderSurface(b) {
@@ -211,7 +167,7 @@ function renderWinds(b) {
   $('winds').innerHTML = `<div class="table-wrap"><table><tr><th>Along route</th><th>Time</th><th>Level</th><th>Wind</th><th>Component</th><th>Temp</th><th>ISA dev</th><th>Freezing level</th></tr>
     ${b.winds.map((w) => `<tr><td class="num">${w.alongNm} nm</td><td>${z(w.time)}</td><td>${w.levelHpa} hPa</td><td class="num">${String(w.dir).padStart(3, '0')}°/${w.spd} kt</td><td class="num ${w.component < 0 ? 'head' : 'tail'}">${w.component > 0 ? '+' : ''}${w.component} kt</td><td class="num">${w.temp}°C</td><td class="num">${w.isaDev > 0 ? '+' : ''}${w.isaDev}</td><td class="num">${w.freezingLevelFt ? w.freezingLevelFt.toLocaleString() + ' ft' : '—'}</td></tr>`).join('')}
   </table></div>
-  <p class="hint">Average wind component ${r.avgWindComponentKt > 0 ? '+' : ''}${r.avgWindComponentKt ?? 0} kt. Route ${r.routeNm} nm + alternate ${r.alternateLegNm} nm = ${r.equivalentStillAirNm} equivalent still-air nm vs ~${r.stillAirRangeNm} nm XLS+ NBAA-IFR range. Source: NOAA GFS via Open-Meteo, nearest pressure level to cruise altitude.</p>`;
+  <p class="hint">Average wind component ${r.avgWindComponentKt > 0 ? '+' : ''}${r.avgWindComponentKt ?? 0} kt. Route ${r.routeNm} nm + alternate ${r.alternateLegNm} nm = ${r.equivalentStillAirNm} equivalent still-air nm vs ~${r.stillAirRangeNm} nm XLS+ NBAA-IFR range. Source: ${esc(b.windsSource || 'NOAA GFS via Open-Meteo')}, nearest pressure level to cruise altitude.</p>`;
 }
 
 function renderHazards(b) {
