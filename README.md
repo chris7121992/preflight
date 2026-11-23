@@ -13,7 +13,7 @@ Requirements: a Firebase project on the **Blaze (pay-as-you-go) plan**. Cloud Fu
 ```bash
 npm install -g firebase-tools
 firebase login
-firebase use --add            # pick your project (replaces YOUR-FIREBASE-PROJECT-ID in .firebaserc)
+firebase use --add            # pick your project (already set to preflight-29da3 in .firebaserc)
 cd functions && npm install && cd ..
 firebase deploy               # deploys hosting + the api function
 ```
