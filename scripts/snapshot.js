@@ -239,6 +239,8 @@ async function main() {
       try {
         const b = await fetchBuf(`${process.env.SITE_URL}/data/${f}`, 1);
         fs.writeFileSync(dest, b);
+        // airports.json from before identifier aliases were added must be rebuilt
+        if (f === 'airports.json' && !b.toString('utf8', 0, 400).includes('"aliases"')) { fs.unlinkSync(dest); continue; }
         if (f !== 'winds.json') {
           // keep the weekly refresh cycle: date the copy by the published meta, if known
           const m = JSON.parse((await fetchBuf(`${process.env.SITE_URL}/data/meta.json`, 1)).toString('utf8'));
