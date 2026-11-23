@@ -510,10 +510,21 @@ async function buildBriefing(plan, input) {
     }
   }
 
+  // Data age (snapshot mode on the free Firebase plan)
+  let dataAsOf = null;
+  const meta = await wx.snapMeta().catch(() => null);
+  if (meta) {
+    dataAsOf = meta.generatedAt;
+    const ageMin = Math.round((Date.now() - Date.parse(meta.generatedAt)) / 60e3);
+    if (ageMin > 45) add('nogo', 'Data', `Weather data is ${ageMin} minutes old`, `The refresh job last ran at ${fmtZ(Date.parse(meta.generatedAt))}. Observations, PIREPs and advisories may have changed. Check that the GitHub refresh job is running, or get current weather from another source before relying on this.`, 'data');
+    else if (ageMin > 20) add('caution', 'Data', `Weather data is ${ageMin} minutes old`, `Last refresh ${fmtZ(Date.parse(meta.generatedAt))}. Newer METARs, PIREPs or advisories may exist.`, 'data');
+  }
+
   const decision = decide(factors, errors, { dep, dest, opts, etaMs });
   const missingCritical = errors.filter((e) => /METAR|TAF|SIGMET|G-AIRMET/.test(e.source));
   return {
     generatedAt: new Date().toISOString(),
+    dataAsOf,
     disclaimer: 'Advisory only. This is not an official FAA/NWS weather briefing and does not satisfy 14 CFR 91.103. Obtain a standard briefing (1800wxbrief.com / Leidos or an approved provider) and comply with the AFM and your operator\'s OpSpecs/SOPs. The pilot in command is the final authority.',
     aircraft: { ...CE56X },
     plan: { name: plan.name, source: plan.source, route: route.map((w) => ({ id: w.id, type: w.type, lat: w.lat, lon: w.lon })), dep: dep.id, dest: dest.id, alternate: opts.alternate, cruiseAlt: opts.cruiseAlt, tas: opts.tas, etd: new Date(opts.etd).toISOString(), eta: new Date(etaMs).toISOString(), eteMin, distanceNm: Math.round(prof.totalNm), rules: opts.rules, limits: { maxXwind: opts.maxXwind, maxTailwind: opts.maxTailwindKt, minCeiling: opts.minCeiling, minVis: opts.minVis, minRunwayFt: opts.minRunwayFt } },

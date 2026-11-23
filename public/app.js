@@ -52,11 +52,13 @@ $('planForm').addEventListener('submit', async (e) => {
     maxXwind: $('maxXwind').value, maxTailwind: $('maxTailwind').value, minCeiling: $('minCeiling').value, minVis: $('minVis').value, minRunway: $('minRunway').value,
   };
   $('go').disabled = true;
-  status('Pulling live METARs, TAFs, PIREPs, SIGMETs, G-AIRMETs, CWAs, WPC fronts and GFS winds…');
+  status('Loading METARs, TAFs, PIREPs, SIGMETs, G-AIRMETs, CWAs, WPC fronts and GFS winds…');
   try {
-    const r = await fetch('/api/brief', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || 'Briefing failed');
+    // The briefing engine runs in the browser; feeds without CORS go through the configured relay.
+    if (!window.PreflightEngine) throw new Error('Briefing engine failed to load. Reload the page.');
+    const cfg = window.PREFLIGHT_CONFIG || {};
+    window.PreflightEngine.configure({ snapshot: cfg.snapshot || null, relay: cfg.relay || null });
+    const data = await window.PreflightEngine.run(body);
     $('status').hidden = true;
     render(data);
   } catch (err) {
@@ -102,7 +104,7 @@ function renderVerdict(b) {
       <span><b>${p.distanceNm} nm</b> · FL${Math.round(p.cruiseAlt / 100)} · ${p.tas} KTAS</span>
       <span>ETD <b>${z(p.etd)}</b> (${local(p.etd)}) · ETA <b>${z(p.eta)}</b> (${local(p.eta)}) · ETE ${Math.floor(p.eteMin / 60)}:${String(p.eteMin % 60).padStart(2, '0')}</span>
       <span>Part ${esc(p.rules)} · ${esc(b.aircraft.name)}</span>
-      <span>Generated ${z(b.generatedAt)}</span>
+      <span>Generated ${z(b.generatedAt)}${b.dataAsOf ? ` · weather data as of <b>${z(b.dataAsOf)}</b> (${Math.round((Date.now() - Date.parse(b.dataAsOf)) / 60e3)} min old)` : ''}</span>
     </div>
     <ul class="reason">${d.reasoning.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`;
 }
@@ -172,7 +174,7 @@ function renderSurface(b) {
       ${fr.map((f) => `<tr><td>${esc(f.name)}</td><td class="num">${f.nearestNowNm} nm</td><td>${f.motion ? (f.motion.speedKt < 5 ? 'Nearly stationary' : `${f.motion.towardCompass} ${f.motion.speedKt} kt`) : '—'}</td><td>${f.crossesRoute ? `<b>Crosses at ${f.encounter.alongRouteNm} nm, ~${z(f.encounter.time)}</b>` : `≥ ${f.encounter.distNm} nm away`}</td><td>${f.depPassage ? z(f.depPassage) : '—'}</td><td>${f.destPassage ? z(f.destPassage) : '—'}</td></tr>`).join('')}</table></div>` : ''}
       <p class="hint">Fronts and pressure centers decoded from the WPC coded surface analysis (valid ${z(sf.analysisValid)}) and 12/24 h progs; motion is the displacement between analysis and 12 h prog, projected to your flight times.</p>`;
   }
-  $('charts').innerHTML = b.charts.map((c) => `<figure><img loading="lazy" src="/api/chart?u=${encodeURIComponent(c.url)}" alt="${esc(c.label)}" onerror="this.closest('figure').remove()"><figcaption>${esc(c.label)}</figcaption></figure>`).join('');
+  $('charts').innerHTML = b.charts.map((c) => `<figure><img loading="lazy" src="${esc(c.url)}" referrerpolicy="no-referrer" alt="${esc(c.label)}" onerror="this.closest('figure').remove()"><figcaption>${esc(c.label)}</figcaption></figure>`).join('');
   $('charts').querySelectorAll('img').forEach((img) => img.addEventListener('click', () => {
     const lb = document.createElement('div');
     lb.className = 'lightbox';

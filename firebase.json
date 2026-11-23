@@ -2,9 +2,9 @@
   "hosting": {
     "public": "public",
     "ignore": ["firebase.json", "**/.*"],
-    "rewrites": [{ "source": "/api/**", "function": { "functionId": "api", "region": "us-central1" } }],
-    "headers": [{ "source": "**/*.@(js|css|html)", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }]
-  },
-  "functions": [{ "source": "functions", "codebase": "default", "runtime": "nodejs22", "ignore": ["node_modules", ".git", "*.log"] }],
-  "emulators": { "functions": { "port": 5001 }, "hosting": { "port": 5000 }, "ui": { "enabled": false } }
+    "headers": [
+      { "source": "/data/**", "headers": [{ "key": "Cache-Control", "value": "no-cache, max-age=0" }] },
+      { "source": "**/*.@(js|css|html)", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }
+    ]
+  }
 }

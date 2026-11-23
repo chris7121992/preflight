@@ -4,34 +4,27 @@ Upload a ForeFlight flight plan and get a route weather briefing built from live
 
 > **Advisory only.** This is not an official FAA/NWS briefing and does not satisfy 14 CFR 91.103. Always obtain a standard briefing from an approved provider and comply with the AFM and your OpSpecs/SOPs. The pilot in command is the final authority.
 
-## Firebase (Hosting + Cloud Functions)
+## How it runs (free Firebase Spark plan)
 
-The web UI is served by **Firebase Hosting** from `public/`, and `/api/**` is rewritten to a 2nd-gen **Cloud Function** (`api`, Node 22, `us-central1`) in `functions/` that fetches the live weather and builds the briefing.
+Live site: **https://preflight-29da3.web.app**
 
-Requirements: a Firebase project on the **Blaze (pay-as-you-go) plan**. Cloud Functions, and their outbound calls to NWS/AWC, need Blaze. Normal use of this tool sits well inside the free tier.
+- **Firebase Hosting** serves the page and a folder of weather files (`public/data/`).
+- The **briefing engine runs in your browser** (`engine/lib`, bundled to `public/engine.js`).
+- A **GitHub Action** (`.github/workflows/refresh-weather.yml`) runs every 10 minutes. It pulls the national METAR/TAF/PIREP caches, SIGMETs, G-AIRMETs, CWAs and WPC coded fronts with `scripts/snapshot.js`, then redeploys Hosting. GitHub can delay scheduled runs by a few minutes at busy times.
+- Winds aloft (GFS via Open-Meteo) and the chart images load live, straight from the browser.
+- The page shows how old the weather data is. Over 20 minutes adds a caution, and over 45 minutes is a NO-GO until the data is refreshed.
 
-```bash
-npm install -g firebase-tools
-firebase login
-firebase use --add            # pick your project (already set to preflight-29da3 in .firebaserc)
-cd functions && npm install && cd ..
-firebase deploy               # deploys hosting + the api function
-```
+### Setting up the refresh job
 
-Your app is then at `https://<project-id>.web.app`.
+1. Push this repository to GitHub. A **public** repo gets unlimited Actions minutes. A private repo's free 2,000 minutes a month covers roughly a 20-30 minute refresh, so change the cron if you go private.
+2. In the repo, go to **Settings → Secrets and variables → Actions → New repository secret**. Name it `FIREBASE_SERVICE_ACCOUNT` and paste the full JSON of a service-account key that has the **Firebase Hosting Admin** role.
+3. Run the workflow once from the **Actions** tab (Run workflow). After that it runs on the schedule.
+4. GitHub pauses scheduled workflows after 60 days with no repository activity. Re-enable it from the Actions tab if that happens.
+5. Optional: in Firebase console → Hosting → Release history, set version retention to a few versions so old deploys don't pile up.
 
-Optional NOTAMs: get free credentials at https://api.faa.gov, then add them as function environment variables in `functions/.env` (not committed):
+## Run it locally
 
-```
-FAA_CLIENT_ID=...
-FAA_CLIENT_SECRET=...
-```
-
-Local testing with the emulator: `firebase emulators:start --only functions,hosting` and open http://localhost:5000.
-
-## Run it locally without Firebase
-
-Requires Node.js 18 or newer, no install needed: `node server.js` and open http://localhost:3000 (`npm test` runs the unit tests). It uses the same handlers as the Cloud Function.
+Node.js 18 or newer: `npm start` builds the engine, pulls a snapshot and serves http://localhost:3000. `npm test` runs the unit tests.
 
 ## Getting the flight plan out of ForeFlight
 
@@ -39,7 +32,7 @@ In ForeFlight, open the route in **Maps** or **Flights**, tap **Share / Send to*
 
 The .fpl format carries no altitude or time, so set cruise altitude, ETD, TAS, alternate and Part 91/135 in the form.
 
-## What it pulls (live, on every run)
+## What it pulls
 
 | Data | Source |
 |---|---|
@@ -47,7 +40,7 @@ The .fpl format carries no altitude or time, so set cruise altitude, ETD, TAS, a
 | SIGMETs, Convective SIGMETs, international SIGMETs | aviationweather.gov Data API |
 | G-AIRMETs (ICE, TURB-HI/LO, LLWS, SFC_WND, IFR, MT_OBSC) | aviationweather.gov Data API |
 | Center Weather Advisories | aviationweather.gov Data API |
-| Airport runways, navaids and fixes | aviationweather.gov Data API |
+| Airport runways and navaids | OurAirports (public domain), refreshed with the snapshot |
 | Surface fronts and pressure centers, analysis + 12/24 h progs | WPC coded bulletins CODSUS / CODSRP (tgftp.nws.noaa.gov) |
 | Surface analysis and forecast chart images | AWC / WPC |
 | Winds, temperatures and freezing level aloft | NOAA GFS via Open-Meteo (the AWC FB wind tables were retired in 2026) |
@@ -83,18 +76,19 @@ The XLS+ figures (FL450 ceiling, ~430 KTAS, 25 kt demonstrated crosswind, ~1,850
 ## Layout
 
 ```
-firebase.json              Hosting config + /api/** rewrite to the function
-.firebaserc                Firebase project alias (set yours)
-functions/index.js         Cloud Function `api` (/api/brief, /api/chart, /api/health)
-functions/handler.js       shared request handlers
-functions/lib/parse.js     .fpl / KML / GPX / route-string parsers
-functions/lib/wx.js        live data fetchers with caching
-functions/lib/fronts.js    WPC coded bulletin decoder and route-relative front analysis
-functions/lib/decode.js    METAR/TAF helpers (ceiling, visibility, TAF windows)
-functions/lib/brief.js     route timing, hazard screening, go/no-go, surface narrative
-functions/lib/aircraft.js  Citation XLS+ profile
-public/                    web UI served by Firebase Hosting (Leaflet map)
-server.js                  optional local dev server
+firebase.json                       Hosting config
+.firebaserc                         Firebase project (preflight-29da3)
+.github/workflows/refresh-weather.yml  10-minute refresh + Hosting deploy
+scripts/snapshot.js                 pulls national weather data into public/data/
+engine/lib/browser.js               browser entry point (bundled to public/engine.js)
+engine/lib/parse.js                 .fpl / KML / GPX / route-string parsers
+engine/lib/wx.js                    data access (snapshot files, or live APIs on a server)
+engine/lib/fronts.js                WPC coded bulletin decoder and route-relative front analysis
+engine/lib/decode.js                METAR/TAF helpers (ceiling, visibility, TAF windows)
+engine/lib/brief.js                 route timing, hazard screening, go/no-go, surface narrative
+engine/lib/aircraft.js              Citation XLS+ profile
+engine/handler.js, server.js        optional local server (also a live-API mode)
+public/                             web UI served by Firebase Hosting (Leaflet map)
 samples/           sample ForeFlight .fpl
 test/              unit tests
 ```

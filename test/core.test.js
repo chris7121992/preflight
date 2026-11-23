@@ -3,11 +3,11 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
-const { parseFlightPlan } = require('../functions/lib/parse');
-const fronts = require('../functions/lib/fronts');
-const dec = require('../functions/lib/decode');
-const { bestRunway } = require('../functions/lib/brief');
-const geo = require('../functions/lib/geo');
+const { parseFlightPlan } = require('../engine/lib/parse');
+const fronts = require('../engine/lib/fronts');
+const dec = require('../engine/lib/decode');
+const { bestRunway } = require('../engine/lib/brief');
+const geo = require('../engine/lib/geo');
 
 test('parses Garmin/ForeFlight .fpl', () => {
   const p = parseFlightPlan(fs.readFileSync(path.join(__dirname, '../samples/KTEB-KPBI.fpl'), 'utf8'), 'x.fpl');

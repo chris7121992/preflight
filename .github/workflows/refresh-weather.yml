@@ -1,0 +1,40 @@
+# Refreshes the weather snapshot and redeploys Firebase Hosting (free Spark plan, no Cloud Functions).
+# Needs repository secret FIREBASE_SERVICE_ACCOUNT: the JSON key of a service account with Firebase Hosting Admin.
+name: Refresh weather
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # GitHub may delay scheduled runs by several minutes at busy times
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: refresh-weather
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build briefing engine
+        run: npm run build
+
+      - name: Pull weather snapshot
+        run: node scripts/snapshot.js
+
+      - name: Deploy to Firebase Hosting
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: |
+          echo "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
+          npx -y firebase-tools@15.37.0 deploy --only hosting --project preflight-29da3 --non-interactive --message "weather refresh ${{ github.run_id }}"
+          rm -f "$RUNNER_TEMP/sa.json"

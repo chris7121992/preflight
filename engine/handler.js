@@ -25,4 +25,14 @@ async function chart(u) {
   return { status: 200, type: r.headers.get('content-type') || 'image/gif', body: Buffer.from(await r.arrayBuffer()) };
 }
 
-module.exports = { brief, chart };
+// Relay for browser use: fetches an allowlisted feed URL and returns it with CORS headers.
+const RELAY_HOSTS = ['aviationweather.gov', 'tgftp.nws.noaa.gov', 'api.weather.gov'];
+async function relay(u) {
+  let url;
+  try { url = new URL(u || ''); } catch { return { status: 400, json: { error: 'Bad URL' } }; }
+  if (!RELAY_HOSTS.includes(url.hostname) || url.protocol !== 'https:') return { status: 400, json: { error: 'Host not allowed' } };
+  const r = await fetch(url, { headers: { 'User-Agent': 'preflight-wx-briefing/1.0', Accept: url.hostname === 'api.weather.gov' ? 'application/geo+json' : '*/*' } });
+  return { status: r.status, type: r.headers.get('content-type') || 'text/plain', body: Buffer.from(await r.arrayBuffer()) };
+}
+
+module.exports = { brief, chart, relay };

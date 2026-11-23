@@ -3,7 +3,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { brief, chart } = require('./functions/handler');
+const { brief, chart, relay } = require('./engine/handler');
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUB = path.join(__dirname, 'public');
@@ -34,6 +34,12 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/brief') {
       const r = await brief(JSON.parse((await readBody(req)) || '{}'));
       return send(res, r.status, r.json);
+    }
+    if (req.method === 'GET' && url.pathname === '/api/relay') {
+      const r = await relay(url.searchParams.get('url'));
+      if (r.json) return send(res, r.status, r.json);
+      res.writeHead(r.status, { 'Content-Type': r.type, 'Cache-Control': 'max-age=60' });
+      return res.end(r.body);
     }
     if (req.method === 'GET' && url.pathname === '/api/chart') {
       const r = await chart(url.searchParams.get('u'));

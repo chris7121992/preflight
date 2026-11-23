@@ -3,6 +3,17 @@
 const AWC = 'https://aviationweather.gov/api/data';
 const UA = 'preflight-wx-briefing/1.0 (advisory weather briefing tool)';
 const cache = new Map();
+const IS_BROWSER = typeof window !== 'undefined' && typeof document !== 'undefined';
+
+// In the browser, feeds that don't send CORS headers go through a relay (Cloudflare Worker or the local dev server).
+const RELAY_HOSTS = new Set(['aviationweather.gov', 'tgftp.nws.noaa.gov', 'api.weather.gov']);
+const config = { relay: null };
+function configure(o = {}) { Object.assign(config, o); }
+function routeUrl(url) {
+  if (!config.relay) return url;
+  const host = new URL(url).hostname;
+  return RELAY_HOSTS.has(host) ? `${config.relay}${config.relay.includes('?') ? '&' : '?'}url=${encodeURIComponent(url)}` : url;
+}
 
 async function get(url, { type = 'json', ttlMs = 120e3, headers = {}, timeoutMs = 20e3 } = {}) {
   const hit = cache.get(url);
@@ -10,7 +21,9 @@ async function get(url, { type = 'json', ttlMs = 120e3, headers = {}, timeoutMs 
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': UA, Accept: type === 'json' ? 'application/json' : '*/*', ...headers }, signal: ctl.signal });
+    const h = IS_BROWSER ? { ...headers } : { 'User-Agent': UA, Accept: type === 'json' ? 'application/json' : '*/*', ...headers };
+    if (IS_BROWSER) delete h.Accept; // keep requests "simple" so no CORS preflight is needed
+    const res = await fetch(routeUrl(url), { headers: h, signal: ctl.signal });
     if (res.status === 204) return type === 'json' ? [] : '';
     if (!res.ok) throw new Error(`${res.status} ${res.statusText} from ${new URL(url).host}`);
     const data = type === 'json' ? await res.json() : await res.text();
@@ -31,9 +44,50 @@ async function safe(name, fn, errors) {
   }
 }
 
+// ---------------------------------------------------------------- snapshot mode (static files on Firebase Hosting)
+const snapCache = new Map();
+async function snap(name, type = 'json') {
+  const hit = snapCache.get(name);
+  if (hit && Date.now() - hit.at < 120e3) return hit.data;
+  const r = await fetch(`${config.snapshot}/${name}?t=${Math.floor(Date.now() / 60e3)}`);
+  if (!r.ok) throw new Error(`snapshot ${name}: ${r.status}`);
+  const data = type === 'json' ? await r.json() : await r.text();
+  snapCache.set(name, { at: Date.now(), data });
+  return data;
+}
+async function snapMeta() {
+  if (!config.snapshot) return null;
+  return snap('meta.json');
+}
+async function snapSource(key, fn) {
+  const meta = await snapMeta();
+  const s = meta && meta.sources && meta.sources[key];
+  if (s && !s.ok) throw new Error(`refresh job could not fetch ${key} (${s.error || 'unknown error'})`);
+  return fn();
+}
+const inBox = (p, b) => p.lat >= b.minLat && p.lat <= b.maxLat && p.lon >= b.minLon && p.lon <= b.maxLon;
+const idMatch = (x, set) => set.has(x.icaoId) || (x.faaId && set.has(x.faaId)) || (x.iataId && set.has(x.iataId));
+const snapAwc = {
+  metar: (ids) => snapSource('metars', async () => (await snap('metars.json')).filter((m) => ids.includes(m.icaoId))),
+  metarBbox: (b) => snapSource('metars', async () => (await snap('metars.json')).filter((m) => inBox(m, b))),
+  taf: (ids) => snapSource('tafs', async () => (await snap('tafs.json')).filter((t) => ids.includes(t.icaoId))),
+  airport: async (ids) => { const set = new Set(ids); return (await snap('airports.json')).filter((a) => idMatch(a, set)); },
+  navaid: async (ids) => { const all = await snap('navaids.json'); return ids.map((id) => all.filter((n) => n.id === id).sort((a, b) => (b.country === 'US') - (a.country === 'US'))[0]).filter(Boolean); },
+  fix: async () => [],
+  pirepBbox: (b, ageH = 2) => snapSource('pireps', async () => (await snap('pireps.json')).filter((p) => inBox(p, b) && Date.now() / 1000 - p.obsTime <= ageH * 3600)),
+  airsigmet: () => snapSource('airsigmet', () => snap('airsigmet.json')),
+  isigmet: () => snapSource('isigmet', () => snap('isigmet.json')),
+  gairmet: () => snapSource('gairmet', () => snap('gairmet.json')),
+  cwa: () => snapSource('cwa', () => snap('cwa.json')),
+};
+const snapWpc = {
+  codsus: () => snapSource('codsus', () => snap('codsus.txt', 'text')),
+  codsrp: () => snapSource('codsrp', () => snap('codsrp.txt', 'text')),
+};
+
 const bboxStr = (b) => `${b.minLat.toFixed(2)},${b.minLon.toFixed(2)},${b.maxLat.toFixed(2)},${b.maxLon.toFixed(2)}`;
 
-const awc = {
+const liveAwc = {
   metar: (ids) => get(`${AWC}/metar?ids=${ids.join(',')}&format=json&hours=3`),
   metarBbox: (b) => get(`${AWC}/metar?bbox=${bboxStr(b)}&format=json`),
   taf: (ids) => get(`${AWC}/taf?ids=${ids.join(',')}&format=json`),
@@ -48,7 +102,7 @@ const awc = {
   afd: (wfo) => get(`${AWC}/fcstdisc?cwa=K${wfo}&type=afd`, { type: 'text', ttlMs: 600e3 }),
 };
 
-const wpc = {
+const liveWpc = {
   codsus: () => get('https://tgftp.nws.noaa.gov/data/raw/as/asus01.kwbc.cod.sus.txt', { type: 'text', ttlMs: 600e3 }),
   codsrp: () => get('https://tgftp.nws.noaa.gov/data/raw/fs/fsus02.kwbc.cod.srp.txt', { type: 'text', ttlMs: 600e3 }),
   charts: () => ([
@@ -61,6 +115,10 @@ const wpc = {
     { label: 'Fronts & NDFD weather, forecast panel 6', url: 'https://www.wpc.ncep.noaa.gov/basicwx/96fndfd.gif' },
   ]),
 };
+
+// Pick live API calls (server / relay) or the snapshot files, per call, based on configure().
+const awc = new Proxy({}, { get: (_, k) => (config.snapshot ? snapAwc : liveAwc)[k] });
+const wpc = new Proxy({}, { get: (_, k) => (k === 'charts' ? liveWpc.charts : (config.snapshot ? snapWpc : liveWpc)[k]) });
 
 const nws = {
   wfoFor: async (lat, lon) => {
@@ -94,7 +152,8 @@ async function windsAloft(points, cruiseFt) {
 
 // Optional: FAA NOTAM API (requires free credentials from api.faa.gov).
 async function notams(ids) {
-  const id = process.env.FAA_CLIENT_ID, secret = process.env.FAA_CLIENT_SECRET;
+  const env = typeof process !== 'undefined' && process.env ? process.env : {};
+  const id = env.FAA_CLIENT_ID, secret = env.FAA_CLIENT_SECRET;
   if (!id || !secret) return null;
   const out = {};
   for (const icao of ids) {
@@ -107,4 +166,4 @@ async function notams(ids) {
   return out;
 }
 
-module.exports = { get, safe, awc, wpc, nws, windsAloft, nearestLevel, altToHpa, notams };
+module.exports = { configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nearestLevel, altToHpa, notams };
