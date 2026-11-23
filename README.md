@@ -4,17 +4,34 @@ Upload a ForeFlight flight plan and get a route weather briefing built from live
 
 > **Advisory only.** This is not an official FAA/NWS briefing and does not satisfy 14 CFR 91.103. Always obtain a standard briefing from an approved provider and comply with the AFM and your OpSpecs/SOPs. The pilot in command is the final authority.
 
-## Run it
+## Firebase (Hosting + Cloud Functions)
 
-Requires Node.js 18 or newer. No dependencies to install.
+The web UI is served by **Firebase Hosting** from `public/`, and `/api/**` is rewritten to a 2nd-gen **Cloud Function** (`api`, Node 22, `us-central1`) in `functions/` that fetches the live weather and builds the briefing.
+
+Requirements: a Firebase project on the **Blaze (pay-as-you-go) plan**. Cloud Functions, and their outbound calls to NWS/AWC, need Blaze. Normal use of this tool sits well inside the free tier.
 
 ```bash
-node server.js          # http://localhost:3000
-PORT=8080 node server.js
-npm test                # unit tests
+npm install -g firebase-tools
+firebase login
+firebase use --add            # pick your project (replaces YOUR-FIREBASE-PROJECT-ID in .firebaserc)
+cd functions && npm install && cd ..
+firebase deploy               # deploys hosting + the api function
 ```
 
-Optional NOTAMs: get free credentials at https://api.faa.gov and set `FAA_CLIENT_ID` and `FAA_CLIENT_SECRET`. Without them the briefing links to the FAA NOTAM search for each airport.
+Your app is then at `https://<project-id>.web.app`.
+
+Optional NOTAMs: get free credentials at https://api.faa.gov, then add them as function environment variables in `functions/.env` (not committed):
+
+```
+FAA_CLIENT_ID=...
+FAA_CLIENT_SECRET=...
+```
+
+Local testing with the emulator: `firebase emulators:start --only functions,hosting` and open http://localhost:5000.
+
+## Run it locally without Firebase
+
+Requires Node.js 18 or newer, no install needed: `node server.js` and open http://localhost:3000 (`npm test` runs the unit tests). It uses the same handlers as the Cloud Function.
 
 ## Getting the flight plan out of ForeFlight
 
@@ -66,14 +83,18 @@ The XLS+ figures (FL450 ceiling, ~430 KTAS, 25 kt demonstrated crosswind, ~1,850
 ## Layout
 
 ```
-server.js          HTTP server (static UI, /api/brief, /api/chart image proxy)
-lib/parse.js       .fpl / KML / GPX / route-string parsers
-lib/wx.js          live data fetchers with caching
-lib/fronts.js      WPC coded bulletin decoder and route-relative front analysis
-lib/decode.js      METAR/TAF helpers (ceiling, visibility, TAF windows)
-lib/brief.js       route timing, hazard screening, go/no-go, surface narrative
-lib/aircraft.js    Citation XLS+ profile
-public/            web UI (Leaflet map)
+firebase.json              Hosting config + /api/** rewrite to the function
+.firebaserc                Firebase project alias (set yours)
+functions/index.js         Cloud Function `api` (/api/brief, /api/chart, /api/health)
+functions/handler.js       shared request handlers
+functions/lib/parse.js     .fpl / KML / GPX / route-string parsers
+functions/lib/wx.js        live data fetchers with caching
+functions/lib/fronts.js    WPC coded bulletin decoder and route-relative front analysis
+functions/lib/decode.js    METAR/TAF helpers (ceiling, visibility, TAF windows)
+functions/lib/brief.js     route timing, hazard screening, go/no-go, surface narrative
+functions/lib/aircraft.js  Citation XLS+ profile
+public/                    web UI served by Firebase Hosting (Leaflet map)
+server.js                  optional local dev server
 samples/           sample ForeFlight .fpl
 test/              unit tests
 ```

@@ -1,10 +1,9 @@
 'use strict';
-// Preflight weather briefing server: static UI + /api/brief. No dependencies (Node 18+).
+// Local dev server: static UI + the same /api handlers the Cloud Function uses. No dependencies (Node 18+).
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { parseFlightPlan } = require('./lib/parse');
-const { buildBriefing } = require('./lib/brief');
+const { brief, chart } = require('./functions/handler');
 
 const PORT = Number(process.env.PORT) || 3000;
 const PUB = path.join(__dirname, 'public');
@@ -33,26 +32,14 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     if (req.method === 'POST' && url.pathname === '/api/brief') {
-      const body = JSON.parse(await readBody(req) || '{}');
-      const text = body.fileText || body.routeText || '';
-      let plan;
-      try {
-        plan = parseFlightPlan(text, body.filename || '');
-      } catch (e) {
-        return send(res, 400, { error: e.message });
-      }
-      if (body.alternate == null && plan.waypoints.length) body.alternate = '';
-      const brief = await buildBriefing(plan, body);
-      return send(res, 200, brief);
+      const r = await brief(JSON.parse((await readBody(req)) || '{}'));
+      return send(res, r.status, r.json);
     }
     if (req.method === 'GET' && url.pathname === '/api/chart') {
-      // Proxy chart images from a fixed allowlist of NWS hosts
-      const u = new URL(url.searchParams.get('u') || '');
-      if (!['www.wpc.ncep.noaa.gov', 'aviationweather.gov'].includes(u.hostname) || u.protocol !== 'https:') return send(res, 400, { error: 'Host not allowed' });
-      const r = await fetch(u, { headers: { 'User-Agent': 'preflight-wx-briefing/1.0' } });
-      if (!r.ok) return send(res, 502, { error: `Upstream ${r.status}` });
-      res.writeHead(200, { 'Content-Type': r.headers.get('content-type') || 'image/gif', 'Cache-Control': 'max-age=300' });
-      return res.end(Buffer.from(await r.arrayBuffer()));
+      const r = await chart(url.searchParams.get('u'));
+      if (r.json) return send(res, r.status, r.json);
+      res.writeHead(200, { 'Content-Type': r.type, 'Cache-Control': 'max-age=300' });
+      return res.end(r.body);
     }
     if (req.method === 'GET' && url.pathname === '/api/health') return send(res, 200, { ok: true });
     if (req.method !== 'GET') return send(res, 405, { error: 'Method not allowed' });
