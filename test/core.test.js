@@ -175,3 +175,26 @@ test('procedures: SID and STAR picked for runway and direction of flight', () =>
   const full = procedures.assemble({ route, sid: s, star: t });
   assert.strictEqual(full.string, `KAAA ${s.pick.code} MIDDD.INNN2 KBBB`);
 });
+
+test('ForeFlight briefing text: flight details and navigation log', () => {
+  const { parseBriefing } = require('../engine/lib/ffbrief');
+  const text = [
+    'KAAA — KBBB (Nov 24, 2026) in N123AB as TST123 (C56X - 560 Citation XLS+) IFR Created Nov 23 2026 2351Z',
+    '250 KIAS/M0.65 - Maximum Cruise Thrust @ FL430 - Normal 2000 FPM Winds Nov 23 2026 1800Z',
+    'ETE Distance Avg Wind ETD ETA TOW ELW', '2h58m 933NM 72kt head (284°/109) 19:45 CST / 0145Z 21:43 CST / 0343Z 20330 lbs 16417 lbs',
+    'Route RAIM (5° Mask, With Baro-aid)', 'DEPP9 PSX J22 NLD ARRV1 ✓ RAIM: No outages predicted',
+    'WAYPOINT AIRWAY HDG CRS ALT CMP DIR/SPD ISA TAS GS LEG REM USED REM ACT LEG REM ETE ACT',
+    'KAAA - - 46 - - -3 - - - 933 200 6055 - 2:58 -', 'SAALT DEPP9 167 167 7800 T4 345/005 0 234 240 10 923 315 5940 0:02 2:56 0:02',
+    'PSX DEPP9 232 224 FL365 H47 262/069 +2 315 268 37 849 834 5421 0:09 2:38 0:20', 'PALACIOS 117.3',
+    '-TOC- DCT 250 244 FL430 H58 278/083 +2 348 290 45 804 1026 5229 0:09 2:29 0:29',
+    'NLD J22 257 249 FL430 H88 285/100 -3 411 323 5 658 1547 4708 0:01 2:03 0:55',
+    'KBBB ARRV1 298 297 692 T2 039/005 +11 237 240 14 - 4113 2142', 'PSX (H61) 259/070 +2 (H60) 269/076 +5',
+    'Alternate KCCC - Somewhere Regional',
+  ].join('\n');
+  const f = parseBriefing(text);
+  assert.deepStrictEqual([f.dep, f.dest, f.alternate, f.cruiseAlt, f.tas, f.callsign], ['KAAA', 'KBBB', 'KCCC', 43000, 411, 'TST123']);
+  assert.strictEqual(f.etd, '2026-11-25T01:45:00.000Z');
+  assert.strictEqual(f.filedRoute, 'DEPP9 PSX J22 NLD ARRV1');
+  assert.strictEqual(f.routeText, 'KAAA SAALT PSX NLD KBBB');
+  assert.strictEqual(parseBriefing('nothing here'), null);
+});

@@ -38,7 +38,20 @@ async function setNotamFile(f) {
     const text = /\.pdf$/i.test(f.name) || f.type === 'application/pdf' ? await window.NotamGuide.readPdf(f) : await f.text();
     const n = window.PreflightEngine.parseNotams(text);
     notamFromFile = text;
-    t.innerHTML = n.length ? `<strong>${esc(f.name)}</strong>: ${n.length} NOTAMs found. Click to replace.` : `<strong>${esc(f.name)}</strong>: no NOTAMs found in this file. Try pasting the text instead.`;
+    // A ForeFlight briefing also carries the flight itself: fill the form from it
+    const fl = window.PreflightEngine.parseBriefing(text);
+    let flightNote = '';
+    if (fl && fl.waypoints.length >= 2) {
+      fileText = null; fileName = '';
+      $('dropText').innerHTML = '<strong>Drop a ForeFlight export</strong><br>.fpl (Garmin), .kml or .gpx, or click to choose';
+      $('routeText').value = fl.routeText;
+      if (fl.etd) { const d = new Date(fl.etd); $('etd').value = new Date(d - d.getTimezoneOffset() * 60e3).toISOString().slice(0, 16); }
+      if (fl.cruiseAlt) $('cruiseAlt').value = fl.cruiseAlt;
+      if (fl.tas) $('tas').value = fl.tas;
+      if (fl.alternate) $('alternate').value = fl.alternate;
+      flightNote = `<br>Flight filled in: ${esc(fl.dep)} to ${esc(fl.dest)}${fl.callsign ? ` as ${esc(fl.callsign)}` : ''}${fl.etd ? `, ETD ${esc(fl.etd.slice(11, 16))}Z ${esc(fl.etd.slice(5, 10))}` : ''}${fl.cruiseAlt ? `, FL${fl.cruiseAlt / 100}` : ''}${fl.alternate ? `, alternate ${esc(fl.alternate)}` : ''}.${fl.filedRoute ? `<br>Filed route: <code>${esc(fl.filedRoute)}</code>` : ''}`;
+    }
+    t.innerHTML = `<strong>${esc(f.name)}</strong>: ${n.length ? `${n.length} NOTAMs found` : 'no NOTAMs found'}. Click to replace.${flightNote}${!n.length && !flightNote ? ' Try pasting the NOTAM text instead.' : ''}`;
   } catch (e) { notamFromFile = ''; t.innerHTML = `Could not read <strong>${esc(f.name)}</strong> (${esc(e.message)}). Try pasting the NOTAM text instead.`; }
 }
 $('notamFile').addEventListener('change', (e) => setNotamFile(e.target.files[0]));

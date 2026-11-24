@@ -28,14 +28,32 @@ async function resolveRoute(plan, errors) {
     const found = new Map();
     const ap = await wx.safe('airport lookup', () => wx.awc.airport(ids.filter((i) => i.length >= 3)), errors);
     for (const a of ap || []) for (const k of [a.icaoId, a.faaId, a.iataId, ...(a.aliases || [])]) if (k && !found.has(k)) found.set(k, { lat: a.lat, lon: a.lon, type: 'AIRPORT' });
-    const rest = ids.filter((i) => !found.has(i));
+    // Navaid, fix and airport codes repeat around the world. Only the two ends of the route are taken as
+    // airports outright; every other name keeps all its matches and the one nearest the trip is used.
+    const endIds = new Set([wps[0].id, wps[wps.length - 1].id]);
+    const rest = ids.filter((i) => !(endIds.has(i) && found.has(i)));
+    const cands = new Map();
+    const push = (id, c) => { if (!cands.has(id)) cands.set(id, []); cands.get(id).push(c); };
+    for (const a of ap || []) for (const k of new Set([a.icaoId, a.faaId, a.iataId, ...(a.aliases || [])])) if (k && rest.includes(k)) push(k, { lat: a.lat, lon: a.lon, type: 'AIRPORT' });
     if (rest.length) {
       const nv = await wx.safe('navaid lookup', () => wx.awc.navaid(rest.filter((i) => i.length <= 3)), errors);
-      for (const n of nv || []) found.set(n.id, { lat: n.lat, lon: n.lon, type: n.type || 'NAVAID' });
-      const fx = await wx.safe('fix lookup', () => wx.awc.fix(rest.filter((i) => i.length === 5 && !found.has(i))), errors);
-      for (const f of fx || []) found.set(f.id, { lat: f.lat, lon: f.lon, type: 'FIX' });
+      for (const n of nv || []) push(n.id, { lat: n.lat, lon: n.lon, type: n.type || 'NAVAID' });
+      const fx = await wx.safe('fix lookup', () => wx.awc.fix(rest.filter((i) => i.length === 5)), errors);
+      for (const f of fx || []) push(f.id, { lat: f.lat, lon: f.lon, type: 'FIX' });
     }
-    for (const w of wps) if (!isFinite(w.lat) && found.has(w.id)) Object.assign(w, found.get(w.id));
+    for (const w of wps) if (!isFinite(w.lat) && endIds.has(w.id) && found.has(w.id)) Object.assign(w, found.get(w.id));
+    const known = wps.filter((w) => isFinite(w.lat) && isFinite(w.lon));
+    const a0 = known[0], z0 = known[known.length - 1];
+    for (const w of wps) {
+      if (isFinite(w.lat) || !cands.has(w.id)) continue;
+      const list = cands.get(w.id).filter((c) => isFinite(c.lat) && isFinite(c.lon));
+      if (!list.length) continue;
+      if (!a0 || a0 === z0) { Object.assign(w, list[0]); continue; }
+      const direct = geo.distNm(a0, z0);
+      const off = (c) => geo.distPointToSegmentNm(c, a0, z0).d;
+      const best = list.slice().sort((x, y) => off(x) - off(y))[0];
+      if (off(best) <= Math.max(250, direct * 0.4)) Object.assign(w, best); // otherwise it is some other place with the same name
+    }
   }
   const unresolved = wps.filter((w) => !isFinite(w.lat));
   if (unresolved.length) errors.push({ source: 'route', error: `Could not locate: ${unresolved.map((w) => w.id).join(', ')} (skipped)` });
