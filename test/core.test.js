@@ -76,8 +76,8 @@ test('crosswind picks best runway', () => {
   assert.ok(r.crossG >= 15 && r.crossG <= 17, `gust crosswind ${r.crossG}`);
 });
 
-test('Collins position relative to a low', () => {
-  const { sectorOf, sideOf } = require('../engine/lib/collins');
+test('position relative to a low', () => {
+  const { sectorOf, sideOf } = require('../engine/lib/sfcread');
   assert.strictEqual(sectorOf(60).key, 'ahead');   // northeast of the low
   assert.strictEqual(sectorOf(160).key, 'warm');   // south-southeast: warm sector
   assert.strictEqual(sectorOf(250).key, 'behind'); // west-southwest: low has passed

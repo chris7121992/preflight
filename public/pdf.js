@@ -14,7 +14,7 @@
   const hm = (min) => `${Math.floor(min / 60)}:${String(Math.abs(min) % 60).padStart(2, '0')}`;
   const clip = (s, n) => { s = t(s); return s.length > n ? s.slice(0, n - 1).replace(/\s+\S*$/, '') + '...' : s; };
 
-  function build(b, k) {
+  function build(b, k, extra) {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF({ unit: 'pt', format: 'letter' });
     const fs = (n) => doc.setFontSize(n * k);
@@ -101,8 +101,8 @@
       [`Alternate (${dest && dest.altTest ? dest.altTest.rule : p.rules === '135' ? '135.223' : '91.169'})`, dest ? (dest.alternateRequired ? 'REQUIRED' : dest.alternateAdvised ? 'advised by models' : 'not required') + (dest.altTest ? ` (needs ${dest.altTest.ceilNeed} ft / ${dest.altTest.visNeed} SM)` : '') : '-'],
       ['Best altitude (wx/wind/fuel)', alt ? `FL${alt.best}` : '-'],
       ['Route option', rec ? (rec.keepFiled ? 'Keep filed route' : clip(rec.best.name, 60)) : '-'],
-      ['Flow aloft (Collins)', b.surface && b.surface.collins ? `${({ sw: 'SW - supports lows', nw: 'NW - clearing', w: 'flat W - little support' })[b.surface.collins.flow] || '-'}${b.surface.collins.lapse != null ? `; lapse ${b.surface.collins.lapse} C/1000 ft` : ''}` : '-'],
-      ['Better weather', b.surface && b.surface.collins && b.surface.collins.betterWeather ? `to the ${b.surface.collins.betterWeather}` : '-'],
+      ['Flow aloft', b.surface && b.surface.reading ? `${({ sw: 'SW - supports lows', nw: 'NW - clearing', w: 'flat W - little support' })[b.surface.reading.flow] || '-'}${b.surface.reading.lapse != null ? `; lapse ${b.surface.reading.lapse} C/1000 ft` : ''}` : '-'],
+      ['Better weather', b.surface && b.surface.reading && b.surface.reading.betterWeather ? `to the ${b.surface.reading.betterWeather}` : '-'],
       ['Data', `${b.dataAsOf ? z(b.dataAsOf) : 'live'}${b.errors.length ? ` - gaps: ${clip(b.errors.map((e) => e.source).join(', '), 60)}` : ' - all sources OK'}`],
     ];
     doc.autoTable({ startY: my, margin: { left: mx + mapW + 10, right: M }, theme: 'plain', body: rows.map((x) => x.map(t)),
@@ -141,14 +141,62 @@
 
     // ------------------------------------------------------------------ page 2
     doc.addPage(); header('page 2 of 2'); y = 64;
-    section('Surface analysis - Collins method (Flying the Weather Map)');
+    section('Surface analysis');
     const narr = (b.surface && b.surface.narrative) || [];
+    const diagrams = (extra && extra.diagrams) || [];
     const last = narr.find((x) => /What it means/.test(x.heading));
-    if (last) para(last.text, { size: 7.4, bold: true, gap: 4 });
+    if (last) {
+      // "What it means for this flight" leads the section, in a tinted box
+      doc.setFont('helvetica', 'normal'); fs(7.4);
+      const wl = doc.splitTextToSize(t(last.text), W - 2 * M - 14);
+      const bh = wl.length * 7.4 * k * 1.22 + 17 * k;
+      doc.setFillColor(238, 244, 253); doc.rect(M, y - 6 * k, W - 2 * M, bh, 'F');
+      doc.setFillColor(...C.accent); doc.rect(M, y - 6 * k, 2.5, bh, 'F');
+      doc.setFont('helvetica', 'bold'); fs(8); doc.setTextColor(...C.navy); doc.text(t(last.heading), M + 8, y + 2 * k);
+      doc.setFont('helvetica', 'normal'); fs(7.4); doc.setTextColor(...C.ink); doc.text(wl, M + 8, y + 12 * k);
+      y += bh + 4 * k;
+    }
+    const short = diagrams.length ? 0.8 : 1; // leave room for the airport diagrams
     for (const x of narr.filter((x) => x !== last).slice(0, 7)) {
       if (!room(20 * k)) break;
       doc.setFont('helvetica', 'bold'); fs(7.2); doc.text(t(x.heading), M, y); y += 8.5 * k;
-      para(clip(x.text, Math.round((/lows|Upper/.test(x.heading) ? 620 : 380) * k)), { size: 6.9, color: [40, 50, 62], gap: 3 });
+      para(clip(x.text, Math.round((/lows|Upper/.test(x.heading) ? 620 : 380) * k * short)), { size: 6.9, color: [40, 50, 62], gap: 3 });
+    }
+
+    if (diagrams.length) {
+      const n = Math.min(3, diagrams.length), gap = 10, dw = (W - 2 * M - gap * (n - 1)) / Math.max(2, n), dh = (n === 3 ? 128 : 150) * k;
+      if (room(dh + 60 * k) && section('NOTAM closures - red closed, dotted partly closed, amber work in progress')) {
+        const y0 = y; let yMax = y;
+        diagrams.slice(0, n).forEach((d, i) => {
+          const x = M + i * (dw + gap);
+          drawAirport(doc, d, x, y0, dw, dh, k);
+          let yy = y0 + dh + 8 * k;
+          const act = d.shown;
+          const uniq = (a) => [...new Set(a)];
+          const cr = uniq(act.filter((it) => it.kind === 'RWY' && it.status === 'closed').map((it) => it.name));
+          const ar = uniq(act.filter((it) => it.kind === 'RWY' && it.status !== 'closed').map((it) => it.name)).filter((r) => !cr.includes(r));
+          const ct = uniq(act.filter((it) => it.kind !== 'RWY' && it.status === 'closed').map((it) => it.name));
+          const pt = uniq(act.filter((it) => it.kind !== 'RWY' && it.status === 'restricted').map((it) => it.name)).filter((r) => !ct.includes(r));
+          const wt = uniq(act.filter((it) => it.kind !== 'RWY' && it.status === 'affected').map((it) => it.name)).filter((r) => !ct.includes(r) && !pt.includes(r));
+          const lines = [
+            [cr.length ? `RWY ${cr.join(', ')} CLOSED` : 'No runway closed', cr.length ? C.nogo : C.ok, true],
+            ar.length ? [`RWY ${ar.join(', ')} restricted or work in progress`, C.caution] : null,
+            ct.length ? [`TWY closed: ${ct.join(', ')}`, C.nogo] : null,
+            pt.length ? [`TWY partly closed: ${pt.join(', ')}`, C.nogo] : null,
+            wt.length ? [`TWY work in progress: ${wt.join(', ')}`, C.caution] : null,
+            d.navs.length ? [`Out of service: ${d.navs.join(', ')}`, C.caution] : null,
+            d.osm ? null : ['Runways only: no taxiway layout on file', C.muted],
+          ].filter(Boolean);
+          for (const [txt, col, bold] of lines) {
+            doc.setFont('helvetica', bold ? 'bold' : 'normal'); fs(6.4); doc.setTextColor(...col);
+            const ls = doc.splitTextToSize(t(txt), dw).slice(0, 2);
+            doc.text(ls, x, yy); yy += ls.length * 6.4 * k * 1.2 + 1;
+          }
+          yMax = Math.max(yMax, yy);
+        });
+        doc.setTextColor(...C.ink);
+        y = yMax + 3 * k;
+      }
     }
 
     if (b.routing) {
@@ -173,12 +221,16 @@
     }
 
     if (b.models && b.models.stations && b.models.stations.some((s) => s.models.length)) {
-      section('Model guidance at the terminals (HRRR / NBM / GFS / ECMWF)');
+      section('NWP model forecasts at each airport (HRRR / NBM / GFS / ECMWF)');
       const names = ['HRRR', 'NBM', 'GFS', 'ECMWF'];
-      const cell = (m) => (m ? `${m.category}${m.ceilingEst != null ? ` base ${m.ceilingEst}` : ''}${m.vis != null ? ` ${m.vis}SM` : ''}${m.wx ? ` ${m.wx}` : ''}${m.gustMax ? ` G${m.gustMax}` : ''}${m.capeMax ? ` CAPE ${m.capeMax}` : ''}` : '-');
-      const body = b.models.stations.map((s) => [`${s.id} ${s.role}`, ...names.map((n) => cell(s.models.find((m) => m.model === n)))].map(t));
-      table({ head: [['Airport', ...names]], body, styles: { fontSize: 6.4 * k, cellPadding: 1.8 * k, lineColor: C.line, lineWidth: 0.4 }, columnStyles: { 0: { fontStyle: 'bold', cellWidth: 80 } },
-        didParseCell: (h) => { const c = String(h.cell.raw).split(' ')[0]; if (h.section === 'body' && h.column.index > 0 && C[c]) h.cell.styles.textColor = C[c]; } });
+      const cell = (m) => (m ? `${m.category}\n${m.ceilingEst != null ? `base ${m.ceilingEst} ft` : 'no low cloud'}${m.vis != null ? `, ${m.vis} SM` : ''}${m.windMax != null || m.gustMax ? `\nwind ${m.windMax ?? '-'}${m.gustMax ? ' G' + m.gustMax : ''} kt` : ''}${m.wx ? `\n${m.wx}` : ''}${m.capeMax >= 500 ? `\nCAPE ${m.capeMax}` : ''}` : '-');
+      const body = b.models.stations.filter((s) => s.models.length).map((s) => {
+        const st = b.stations.find((x) => x.id === s.id && x.role === s.role) || {};
+        return [`${s.id}\n${s.role}\n${z(s.window[0])}-${z(s.window[1])}`, ...names.map((n) => cell(s.models.find((m) => m.model === n))), `${s.consensus || '-'}${s.spread >= 2 ? '\nlow agreement' : ''}${st.judgedFrom ? `\njudged on ${/^models/.test(st.judgedFrom) ? 'models' : st.judgedFrom}` : ''}`].map(t);
+      });
+      table({ head: [['Airport / window', ...names, 'Middle of models']], body, styles: { fontSize: 6.3 * k, cellPadding: 1.8 * k, lineColor: C.line, lineWidth: 0.4 }, columnStyles: { 0: { fontStyle: 'bold', cellWidth: 78 }, 5: { cellWidth: 74 } },
+        didParseCell: (h) => { const c = String(h.cell.raw).split(/[ \n]/)[0]; if (h.section === 'body' && h.column.index > 0 && C[c]) h.cell.styles.textColor = C[c]; } });
+      para('Model cloud bases are estimates and models are not an official forecast. Where the TAF covers the time, the TAF decides and the models are a cross-check.', { size: 6, color: C.muted, gap: 2 });
     }
 
     if (b.winds && b.winds.length) {
@@ -289,11 +341,65 @@
     doc.setTextColor(...C.ink);
   }
 
+  // Airport closure diagram: aprons, taxiways and runways as vectors, closures in red
+  function drawAirport(doc, d, x0, y0, w, h, k) {
+    const RED = [200, 30, 30], AMB = [217, 119, 6];
+    let pts = d.bounds.length ? d.bounds : d.twys.flatMap((t) => t.ll);
+    if (!pts.length) return;
+    let minLat = Math.min(...pts.map((p) => p[0])), maxLat = Math.max(...pts.map((p) => p[0])), minLon = Math.min(...pts.map((p) => p[1])), maxLon = Math.max(...pts.map((p) => p[1]));
+    const cosm = Math.cos(((minLat + maxLat) / 2) * Math.PI / 180), pad = 14;
+    const sc = Math.min((w - 2 * pad) / Math.max(1e-6, (maxLon - minLon) * cosm), (h - 2 * pad) / Math.max(1e-6, maxLat - minLat));
+    const cx = (minLon + maxLon) / 2, cy = (minLat + maxLat) / 2;
+    const X = (lon) => x0 + w / 2 + (lon - cx) * cosm * sc, Y = (lat) => y0 + h / 2 - (lat - cy) * sc;
+    const path = (ll) => { for (let i = 1; i < ll.length; i++) doc.line(X(ll[i - 1][1]), Y(ll[i - 1][0]), X(ll[i][1]), Y(ll[i][0])); };
+    const cross = (p, r, col) => { doc.setDrawColor(...col); doc.setLineWidth(1); const x = X(p[1]), y = Y(p[0]); doc.line(x - r, y - r, x + r, y + r); doc.line(x - r, y + r, x + r, y - r); };
+    doc.setFillColor(248, 249, 251); doc.rect(x0, y0, w, h, 'F');
+    let clipped = false;
+    try { doc.saveGraphicsState(); doc.rect(x0, y0, w, h, null); doc.clip(); doc.discardPath(); clipped = true; } catch (e) { /* older jsPDF */ }
+    doc.setLineCap('butt');
+    doc.setFillColor(226, 230, 236);
+    for (const ll of d.aprons) { if (ll.length < 3) continue; try { doc.lines(ll.slice(1).map((p, i) => [X(p[1]) - X(ll[i][1]), Y(p[0]) - Y(ll[i][0])]), X(ll[0][1]), Y(ll[0][0]), [1, 1], 'F', true); } catch (e) { /* skip shape */ } }
+    for (const tw of d.twys.filter((q) => !q.state)) { doc.setDrawColor(160, 168, 178); doc.setLineWidth(tw.lane ? 0.4 : 1); path(tw.ll); }
+    for (const tw of d.twys.filter((q) => q.state)) {
+      doc.setDrawColor(...(tw.state === 'dotAffected' ? AMB : RED)); doc.setLineWidth(tw.state === 'closed' ? 1.8 : 1.5);
+      if (tw.state !== 'closed') doc.setLineDashPattern([1.2, 2.2], 0);
+      path(tw.ll); doc.setLineDashPattern([], 0);
+    }
+    doc.setDrawColor(...RED); doc.setLineWidth(2.4);
+    for (const sg of d.segs) for (const ll of sg.ll) path(ll);
+    for (const r of d.rwys) {
+      doc.setDrawColor(...(r.closed ? RED : r.its.length ? AMB : [45, 55, 68])); doc.setLineWidth(3.6); path(r.ll);
+      for (const p of r.marks) cross(p, 2.6, [255, 255, 255]);
+    }
+    for (const xx of d.xs) cross([xx.lat, xx.lon], 2.8, [90, 10, 10]);
+    // labels: runway ends, and the taxiways that are affected
+    const tag = (text, p, col, size, bold) => {
+      doc.setFont('helvetica', bold ? 'bold' : 'normal'); doc.setFontSize(size * k);
+      const tw = doc.getTextWidth(text) + 3, th = size * k + 1.5, x = Math.min(x0 + w - tw - 1, Math.max(x0 + 1, X(p[1]) - tw / 2)), y = Math.min(y0 + h - th - 1, Math.max(y0 + 1, Y(p[0]) - th / 2));
+      doc.setFillColor(255, 255, 255); doc.setDrawColor(...col); doc.setLineWidth(0.4); doc.rect(x, y, tw, th, 'FD');
+      doc.setTextColor(...col); doc.text(text, x + 1.5, y + th - 2);
+    };
+    for (const v of d.labels.filter((q) => q.hit)) tag(t(v.name), v.at, v.hit === 'closed' ? RED : AMB, 5, true);
+    for (const r of d.rwys) for (const e of r.ends) {
+      // push the number just beyond the runway end
+      const o = r.ends[0] === e ? r.ends[1] : r.ends[0], dx = (e.at[1] - o.at[1]) * cosm, dy = e.at[0] - o.at[0], len = Math.hypot(dx, dy) || 1, off = 7 / sc;
+      tag(t(e.text), [e.at[0] + (dy / len) * off, e.at[1] + ((dx / len) * off) / cosm], r.closed ? RED : [22, 32, 43], 5.6, true);
+    }
+    if (clipped) doc.restoreGraphicsState();
+    doc.setDrawColor(...C.line); doc.setLineWidth(0.6); doc.rect(x0, y0, w, h);
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(7 * k); doc.setTextColor(...C.ink); doc.text(t(d.id), x0 + 4, y0 + 9 * k);
+    const idW = doc.getTextWidth(t(d.id));
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(5.4 * k); doc.setTextColor(...C.muted); doc.text(t(d.role || ''), x0 + 8 + idW, y0 + 9 * k);
+    if (d.osm) doc.text('(c) OpenStreetMap contributors', x0 + w - 3, y0 + h - 3, { align: 'right' });
+    doc.setTextColor(...C.ink);
+  }
+
   async function download(b) {
     if (!window.jspdf || !window.jspdf.jsPDF) throw new Error('PDF library did not load. Check your connection and reload.');
-    let doc;
-    for (const k of [1, 0.94, 0.88, 0.82, 0.76]) {
-      doc = build(b, k);
+    let doc, diagrams = [];
+    try { if (window.NotamGuide && window.NotamGuide.diagrams) diagrams = await window.NotamGuide.diagrams(b); } catch (e) { /* brief without diagrams */ }
+    for (const k of [1, 0.94, 0.88, 0.82, 0.76, 0.7]) {
+      doc = build(b, k, { diagrams });
       if (doc.getNumberOfPages() <= 2 && !doc.__overflow) break;
     }
     while (doc.getNumberOfPages() > 2) doc.deletePage(doc.getNumberOfPages());

@@ -182,34 +182,27 @@
   const fmtT = (ms) => (ms ? new Date(ms).toISOString().replace('T', ' ').slice(5, 16) + 'Z' : '');
   const when = (n) => (n.start ? `${fmtT(n.start)} to ${n.perm ? 'permanent' : n.end ? fmtT(n.end) : 'further notice'}` : 'time not stated');
 
-  function drawAirport(a, list, box) {
+  // What to draw for one airport: shapes with their closure state. Shared by the on-screen map and the PDF brief.
+  function model(a, list) {
     const act = list.filter((n) => n.active);
     const items = act.flatMap((n) => (n.items || []).map((it) => ({ ...it, n })));
     const shown = items.filter((it) => it.status !== 'minor');
-    const mapEl = box.querySelector('.admap'), note = box.querySelector('.adnote');
-    if (a.lat == null || !window.L) { mapEl.remove(); return; }
     let els = cached(a.id);
     const osm = !!els;
     els = osm ? nameRunways(els.map((e) => ({ ...e, tags: { ...e.tags } })), a) : schematic(a);
-    if (mapEl._ad) { try { mapEl._ad.remove(); } catch (e) { /* gone */ } }
-    const map = (mapEl._ad = L.map(mapEl, { zoomSnap: 0.25, attributionControl: true, scrollWheelZoom: false }));
-    maps.push(map);
-    map.attributionControl.setPrefix(false).addAttribution(osm ? 'Layout © OpenStreetMap contributors' : 'Runways from OurAirports');
-    const tip = (its) => its.map((it) => `<b>${esc(it.n.number || '')}</b> ${esc(it.n.text)}<br><span class="hint">${esc(when(it.n))}</span>`).join('<hr>');
-    const bounds = [];
-    for (const e of els.filter((x) => x.tags.aeroway === 'apron')) L.polygon(e.geometry.map((g) => [g.lat, g.lon]), { className: 'ad-apron', weight: 1, interactive: false }).addTo(map);
+    const m = { osm, shown, aprons: [], twys: [], segs: [], xs: [], rwys: [], labels: [], bounds: [] };
+    for (const e of els.filter((x) => x.tags.aeroway === 'apron')) m.aprons.push(e.geometry.map((g) => [g.lat, g.lon]));
     const twys = els.filter((x) => /taxiway|taxilane/.test(x.tags.aeroway));
-    const overlays = [];
     // Closed sections between two limits, and closures at an intersection
     for (const it of shown.filter((x) => x.kind === 'TWY' && x.status === 'restricted')) {
       if (it.between) {
         const seg = between(els, it.name, it.between);
-        if (seg) { overlays.push(() => L.polyline(seg, { color: COLORS.closed, weight: 7, lineCap: 'butt' }).addTo(map).bindPopup(tip([it]), { maxWidth: 340 })); it.placed = true; }
+        if (seg) { m.segs.push({ ll: seg, it }); it.placed = true; }
       } else if (it.at) {
         const mine = twys.filter((e) => ref(e) === it.name), other = els.filter((e) => (it.at.kind === 'RWY' ? e.tags.aeroway === 'runway' && sameRwy(ref(e), it.at.name) : ref(e) === it.at.name && /taxi/.test(e.tags.aeroway)));
         let best = null;
-        for (const m of mine) for (const g of m.geometry) for (const o of other) for (const h of o.geometry) { const d = dist(g, h); if (!best || d < best.d) best = { d, g }; }
-        if (best && best.d < 80) { overlays.push(() => L.marker([best.g.lat, best.g.lon], { icon: label('✕', 'xmark dark') }).addTo(map).bindPopup(tip([it]), { maxWidth: 340 })); it.placed = true; }
+        for (const w of mine) for (const g of w.geometry) for (const o of other) for (const h of o.geometry) { const d = dist(g, h); if (!best || d < best.d) best = { d, g }; }
+        if (best && best.d < 80) { m.xs.push({ lat: best.g.lat, lon: best.g.lon, it }); it.placed = true; }
       }
     }
     // Taxiways (a partly closed one is dotted only when its closed section could not be placed)
@@ -217,40 +210,75 @@
     for (const e of twys) {
       const name = ref(e), its = shown.filter((it) => it.kind !== 'RWY' && it.name === name);
       const whole = its.filter((it) => it.status === 'closed'), part = its.filter((it) => it.status !== 'closed' && !it.placed);
-      const ll = e.geometry.map((g) => [g.lat, g.lon]);
-      const style = whole.length ? { color: COLORS.closed, weight: 5 } : part.length ? { color: part.some((p) => p.status === 'affected') && !part.some((p) => p.status === 'restricted') ? COLORS.affected : COLORS.closed, weight: 4, dashArray: '2 7', opacity: 0.9 } : { className: 'ad-twy', weight: e.tags.aeroway === 'taxilane' ? 1.5 : 3 };
-      const line = L.polyline(ll, style).addTo(map);
-      if (its.length) line.bindPopup(tip(its), { maxWidth: 340 });
+      const state = whole.length ? 'closed' : part.length ? (part.some((p) => p.status === 'affected') && !part.some((p) => p.status === 'restricted') ? 'dotAffected' : 'dotClosed') : '';
+      m.twys.push({ ll: e.geometry.map((g) => [g.lat, g.lon]), state, lane: e.tags.aeroway === 'taxilane', its });
       if (name) { const len = e.geometry.length; const cur = labelled.get(name); if (!cur || len > cur.len) labelled.set(name, { len, at: mid(e.geometry), hit: its.length ? (whole.length ? 'closed' : 'part') : '' }); }
     }
-    overlays.forEach((f) => f());
-    // Runways
     for (const e of els.filter((x) => x.tags.aeroway === 'runway')) {
       const its = shown.filter((it) => it.kind === 'RWY' && sameRwy(it.name, ref(e)));
       const closed = its.some((it) => it.status === 'closed');
       const ll = e.geometry.map((g) => [g.lat, g.lon]);
-      ll.forEach((p) => bounds.push(p));
-      const line = L.polyline(ll, closed || its.length ? { color: closed ? COLORS.closed : COLORS.affected, weight: 9, lineCap: 'butt' } : { className: 'ad-rwy', weight: 9, lineCap: 'butt' }).addTo(map);
-      if (its.length) line.bindPopup(tip(its), { maxWidth: 340 });
-      if (closed) for (const f of [0.2, 0.5, 0.8]) { const i = Math.min(ll.length - 2, Math.floor(f * (ll.length - 1))), t = f * (ll.length - 1) - i; L.marker([ll[i][0] + (ll[i + 1][0] - ll[i][0]) * t, ll[i][1] + (ll[i + 1][1] - ll[i][1]) * t], { icon: label('✕', 'xmark'), interactive: false }).addTo(map); }
+      ll.forEach((p) => m.bounds.push(p));
+      const r = { ll, closed, its, marks: [], ends: [] };
+      if (closed) for (const f of [0.2, 0.5, 0.8]) { const i = Math.min(ll.length - 2, Math.floor(f * (ll.length - 1))), t = f * (ll.length - 1) - i; r.marks.push([ll[i][0] + (ll[i + 1][0] - ll[i][0]) * t, ll[i][1] + (ll[i + 1][1] - ll[i][1]) * t]); }
       // end numbers: the lower number sits at the end the runway line points away from
       const ends = rwyEnds(ref(e));
       if (ends.length === 2 && ends[0]) {
         const g = e.geometry, brg = (Math.atan2((g[g.length - 1].lon - g[0].lon) * Math.cos((g[0].lat * Math.PI) / 180), g[g.length - 1].lat - g[0].lat) * 180) / Math.PI;
         const first = Math.abs(((brg - parseInt(ends[0], 10) * 10 + 540) % 360) - 180) < 90 ? 0 : 1;
-        L.marker([g[0].lat, g[0].lon], { icon: label(ends[first], 'rwyno' + (closed ? ' bad' : '')), interactive: false }).addTo(map);
-        L.marker([g[g.length - 1].lat, g[g.length - 1].lon], { icon: label(ends[1 - first], 'rwyno' + (closed ? ' bad' : '')), interactive: false }).addTo(map);
+        r.ends.push({ at: [g[0].lat, g[0].lon], text: ends[first] }, { at: [g[g.length - 1].lat, g[g.length - 1].lon], text: ends[1 - first] });
       }
+      m.rwys.push(r);
     }
-    for (const [name, v] of labelled) L.marker([v.at.lat, v.at.lon], { icon: label(name, 'twyno ' + (v.hit === 'closed' ? 'bad' : v.hit === 'part' ? 'warn' : '')), interactive: false }).addTo(map);
-    if (bounds.length) map.fitBounds(bounds, { padding: [28, 28] }); else map.setView([a.lat, a.lon], 14);
-    const missing = shown.filter((it) => it.kind === 'TWY' && !twys.some((e) => ref(e) === it.name));
-    const unplaced = shown.filter((it) => it.kind === 'TWY' && it.status === 'restricted' && !it.placed && twys.some((e) => ref(e) === it.name));
+    for (const [name, v] of labelled) m.labels.push({ name, at: [v.at.lat, v.at.lon], hit: v.hit });
+    m.missing = [...new Set(shown.filter((it) => it.kind === 'TWY' && !twys.some((e) => ref(e) === it.name)).map((x) => x.name))];
+    m.unplaced = [...new Set(shown.filter((it) => it.kind === 'TWY' && it.status === 'restricted' && !it.placed && twys.some((e) => ref(e) === it.name)).map((x) => x.name))];
+    return m;
+  }
+
+  function drawAirport(a, list, box) {
+    const mapEl = box.querySelector('.admap'), note = box.querySelector('.adnote');
+    if (a.lat == null || !window.L) { mapEl.remove(); return; }
+    const m = model(a, list), osm = m.osm;
+    if (mapEl._ad) { try { mapEl._ad.remove(); } catch (e) { /* gone */ } }
+    const map = (mapEl._ad = L.map(mapEl, { zoomSnap: 0.25, attributionControl: true, scrollWheelZoom: false }));
+    maps.push(map);
+    map.attributionControl.setPrefix(false).addAttribution(osm ? 'Layout © OpenStreetMap contributors' : 'Runways from OurAirports');
+    const tip = (its) => its.map((it) => `<b>${esc(it.n.number || '')}</b> ${esc(it.n.text)}<br><span class="hint">${esc(when(it.n))}</span>`).join('<hr>');
+    for (const ll of m.aprons) L.polygon(ll, { className: 'ad-apron', weight: 1, interactive: false }).addTo(map);
+    for (const t of m.twys) {
+      const style = t.state === 'closed' ? { color: COLORS.closed, weight: 5 } : t.state ? { color: t.state === 'dotAffected' ? COLORS.affected : COLORS.closed, weight: 4, dashArray: '2 7', opacity: 0.9 } : { className: 'ad-twy', weight: t.lane ? 1.5 : 3 };
+      const line = L.polyline(t.ll, style).addTo(map);
+      if (t.its.length) line.bindPopup(tip(t.its), { maxWidth: 340 });
+    }
+    for (const sg of m.segs) L.polyline(sg.ll, { color: COLORS.closed, weight: 7, lineCap: 'butt' }).addTo(map).bindPopup(tip([sg.it]), { maxWidth: 340 });
+    for (const x of m.xs) L.marker([x.lat, x.lon], { icon: label('✕', 'xmark dark') }).addTo(map).bindPopup(tip([x.it]), { maxWidth: 340 });
+    for (const r of m.rwys) {
+      const line = L.polyline(r.ll, r.closed || r.its.length ? { color: r.closed ? COLORS.closed : COLORS.affected, weight: 9, lineCap: 'butt' } : { className: 'ad-rwy', weight: 9, lineCap: 'butt' }).addTo(map);
+      if (r.its.length) line.bindPopup(tip(r.its), { maxWidth: 340 });
+      for (const p of r.marks) L.marker(p, { icon: label('✕', 'xmark'), interactive: false }).addTo(map);
+      for (const e of r.ends) L.marker(e.at, { icon: label(e.text, 'rwyno' + (r.closed ? ' bad' : '')), interactive: false }).addTo(map);
+    }
+    for (const v of m.labels) L.marker(v.at, { icon: label(v.name, 'twyno ' + (v.hit === 'closed' ? 'bad' : v.hit === 'part' ? 'warn' : '')), interactive: false }).addTo(map);
+    if (m.bounds.length) map.fitBounds(m.bounds, { padding: [28, 28] }); else map.setView([a.lat, a.lon], 14);
     note.innerHTML = [
       osm ? '' : box.dataset.loading ? 'Loading the taxiway layout…' : 'The taxiway layout could not be loaded, so only the runways are drawn.',
-      osm && missing.length ? `Not on the map (no taxiway with that name in OpenStreetMap): ${esc([...new Set(missing.map((m) => m.name))].join(', '))}.` : '',
-      unplaced.length ? `Dotted red marks a taxiway that is partly closed where the exact section could not be placed: ${esc([...new Set(unplaced.map((m) => m.name))].join(', '))}.` : '',
+      osm && m.missing.length ? `Not on the map (no taxiway with that name in OpenStreetMap): ${esc(m.missing.join(', '))}.` : '',
+      m.unplaced.length ? `Dotted red marks a taxiway that is partly closed where the exact section could not be placed: ${esc(m.unplaced.join(', '))}.` : '',
     ].filter(Boolean).join(' ');
+  }
+
+  // For the PDF brief: one drawing model per airport that has NOTAMs, once the layouts are loaded
+  async function diagrams(b) {
+    const n = b.notams;
+    if (!n || !n.available) return [];
+    const withNotams = n.airports.filter((a) => (n.byAirport[a.id] || []).length);
+    try { await Promise.race([loadGeometry(withNotams), new Promise((r) => setTimeout(r, 12000))]); } catch (e) { /* runways only */ }
+    return withNotams.filter((a) => a.lat != null).map((a) => {
+      const list = n.byAirport[a.id];
+      const navs = list.filter((x) => x.active && x.nav).map((x) => x.nav.aid + (x.nav.rwy ? ' ' + x.nav.rwy : ''));
+      try { return { id: a.id, name: a.name, role: a.role, navs: [...new Set(navs)], ...model(a, list) }; } catch (e) { return null; }
+    }).filter(Boolean);
   }
 
   function listHtml(list) {
@@ -294,5 +322,5 @@
     if (pending) loadGeometry(withNotams, (left) => { if (el.isConnected) { setLoading(left); draw(); } }).finally(() => { if (!el.isConnected) return; el.querySelectorAll('.adbox').forEach((bx) => delete bx.dataset.loading); draw(); });
   }
 
-  window.NotamGuide = { readPdf, render };
+  window.NotamGuide = { readPdf, render, diagrams };
 })();

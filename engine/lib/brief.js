@@ -6,7 +6,7 @@ const wx = require('./wx');
 const fronts = require('./fronts');
 const dec = require('./decode');
 const { CE56X } = require('./aircraft');
-const collins = require('./collins');
+const sfcread = require('./sfcread');
 const nwp = require('./nwp');
 const routing = require('./routing');
 const minimums = require('./minimums');
@@ -276,7 +276,7 @@ async function buildBriefing(plan, input) {
     });
   }
 
-  // Upper-air summary at each winds point (850/700/500 mb): Collins' upper-support and stability checks, model icing screen
+  // Upper-air summary at each winds point (850/700/500 mb): upper-support and stability checks, model icing screen
   const upper = wm ? windPts.map((p, i) => {
     const smp = S.reduce((a, b) => (Math.abs(b.s - p.s) < Math.abs(a.s - p.s) ? b : a));
     const g = (k) => wm.at(i, smp.t, k);
@@ -723,10 +723,10 @@ async function buildBriefing(plan, input) {
     const sections = [...fronts.parseCoded(codsus, ref), ...(codsrp ? fronts.parseCoded(codsrp, ref) : [])];
     surface = fronts.interpretRoute(sections, S, { corridorNm: 400 });
     if (surface.available) {
-      const c = collins.analyze(surface, { S, dep, dest, prof, stations, opts, upper, regional: regionalMetars || enrouteMetars || [] });
-      surface.method = 'Richard L. Collins, Flying the Weather Map';
+      const c = sfcread.analyze(surface, { S, dep, dest, prof, stations, opts, upper, regional: regionalMetars || enrouteMetars || [] });
+      surface.method = 'lows first';
       surface.narrative = c.paras;
-      surface.collins = c.summary;
+      surface.reading = c.summary;
       for (const f of c.factors) add(f.level, f.category, f.title, f.detail, f.where);
     }
     for (const f of surface.fronts || []) {
@@ -902,7 +902,7 @@ function sourceList(errors) {
     ['WPC surface progs (CODSRP)', 'NWS WPC 12/24 h coded surface progs'],
     ['Winds aloft (GFS via Open-Meteo)', 'NOAA GFS via Open-Meteo (AWC FB tables were retired in 2026)'],
     ['En-route METARs', 'aviationweather.gov Data API'],
-    ['Regional METARs', 'aviationweather.gov Data API (for Collins-method contrast, moisture and upstream checks)'],
+    ['Regional METARs', 'aviationweather.gov Data API (for frontal contrast, moisture and upstream checks)'],
     ['Model guidance (HRRR/NBM/GFS/ECMWF)', 'NOAA HRRR/NBM/GFS and ECMWF IFS point forecasts, decoded from GRIB2 by Open-Meteo'],
     ['SIDs and STARs (FAA NASR)', 'FAA NASR 28-day subscription: departure procedures and STARs with their fixes'],
     ['Approach minimums (FAA d-TPP)', 'FAA digital Terminal Procedures: landing minimums and Alternate Minimums pages, rebuilt each 28-day chart cycle'],

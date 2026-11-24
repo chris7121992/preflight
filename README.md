@@ -12,7 +12,7 @@ Live site: **https://preflight-29da3.web.app**
 - The **briefing engine runs in your browser** (`engine/lib`, bundled to `public/engine.js`).
 - A **GitHub Action** (`.github/workflows/refresh-weather.yml`) refreshes every 10 minutes. It pulls the national METAR/TAF/PIREP caches, SIGMETs, G-AIRMETs, CWAs and WPC coded fronts with `scripts/snapshot.js`, then redeploys Hosting. GitHub's cron scheduler can skip runs for hours on new repositories, so each run loops every 10 minutes for about 5.5 hours and then starts the next run itself; the cron is only a backup.
 - Winds aloft (GFS), model guidance (HRRR, NBM, GFS, ECMWF IFS, decoded from GRIB2 by Open-Meteo) and the chart images load live, straight from the browser.
-- **2-page PDF brief:** after a run, the *2-page brief (PDF)* button downloads a letter-size brief (decision, surface sketch, terminals with alternate rules, factors, Collins analysis, route/altitude options, model guidance, winds, raw reports).
+- **2-page PDF brief:** after a run, the *2-page brief (PDF)* button downloads a letter-size brief (decision, surface sketch, terminals with alternate rules, factors, surface analysis led by "What it means for this flight", NOTAM closure diagrams, route/altitude options, NWP model forecasts, winds, raw reports).
 - The page shows how old the weather data is. Over 20 minutes adds a caution, and over 45 minutes is a NO-GO until the data is refreshed.
 
 ### Setting up the refresh job
