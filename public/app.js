@@ -139,26 +139,43 @@ function status(msg, err, busy) {
   s.innerHTML = (busy ? '<span class="spin"></span>' : '') + esc(msg);
 }
 
+// A phone can hold an older copy of the page while loading this newer script, so cards added since are
+// created here when the page does not have them, and one card failing never stops the rest.
+const LATER_CARDS = [['fuelCard', 'fuel', 'Fuel recommendation', 'Fuel', 'modelsCard'], ['simCard', 'simradar', 'Simulated radar for the flight', 'Sim radar', 'terminalsCard']];
+function ensureCards() {
+  for (const [cardId, bodyId, title, tab, beforeId] of LATER_CARDS) {
+    if ($(bodyId)) continue;
+    const card = document.createElement('div');
+    card.className = 'card'; card.id = cardId;
+    card.innerHTML = `<h2>${esc(title)}</h2><div id="${bodyId}"></div>`;
+    const before = $(beforeId);
+    if (before && before.parentNode) before.parentNode.insertBefore(card, before); else $('results').appendChild(card);
+    const tabs = $('tabs');
+    if (tabs) { const a = document.createElement('a'); a.href = '#' + cardId; a.textContent = tab; tabs.appendChild(a); }
+  }
+}
+function loadScriptOnce(src) {
+  return new Promise((res, rej) => { const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = () => rej(new Error('could not load ' + src)); document.head.appendChild(el); });
+}
+function renderSimRadar(b) {
+  const el = $('simradar');
+  if (!el) return;
+  const go = () => { try { window.SimRadar.render(b, el); } catch (e) { el.textContent = 'Simulated radar could not be shown: ' + e.message; } };
+  if (window.SimRadar) go();
+  else loadScriptOnce('simradar.js?v=' + Date.now()).then(go).catch((e) => { el.textContent = 'Simulated radar could not be shown: ' + e.message; });
+}
+
 function render(b) {
   $('results').hidden = false;
   $('printBtn').hidden = false;
   $('pdfBtn').hidden = false;
   lastBrief = b;
-  renderVerdict(b);
-  renderFactors(b);
-  renderMap(b);
-  renderSurface(b);
-  renderTerminals(b);
-  renderWinds(b);
-  renderHazards(b);
-  renderFuel(b);
-  try { window.SimRadar.render(b, $('simradar')); } catch (e) { $('simradar').textContent = 'Simulated radar could not be shown: ' + e.message; }
-  renderPireps(b);
-  renderEnroute(b);
-  renderNotams(b);
-  renderSources(b);
-  renderRouting(b);
-  renderModels(b);
+  ensureCards();
+  const failed = [];
+  for (const fn of [renderVerdict, renderFactors, renderMap, renderSurface, renderTerminals, renderWinds, renderHazards, renderFuel, renderSimRadar, renderPireps, renderEnroute, renderNotams, renderSources, renderRouting, renderModels]) {
+    try { fn(b); } catch (e) { failed.push(fn.name.replace(/^render/, '')); if (window.console) console.error(fn.name, e); }
+  }
+  if (failed.length) status(`Briefing ready, but these sections could not be shown: ${failed.join(', ')}. Reload the page to get the latest version.`, true);
   $('results').scrollIntoView({ behavior: 'smooth' });
 }
 
