@@ -10,8 +10,9 @@ Live site: **https://preflight-29da3.web.app**
 
 - **Firebase Hosting** serves the page and a folder of weather files (`public/data/`).
 - The **briefing engine runs in your browser** (`engine/lib`, bundled to `public/engine.js`).
-- A **GitHub Action** (`.github/workflows/refresh-weather.yml`) runs every 10 minutes. It pulls the national METAR/TAF/PIREP caches, SIGMETs, G-AIRMETs, CWAs and WPC coded fronts with `scripts/snapshot.js`, then redeploys Hosting. GitHub can delay scheduled runs by a few minutes at busy times.
-- Winds aloft (GFS via Open-Meteo) and the chart images load live, straight from the browser.
+- A **GitHub Action** (`.github/workflows/refresh-weather.yml`) refreshes every 10 minutes. It pulls the national METAR/TAF/PIREP caches, SIGMETs, G-AIRMETs, CWAs and WPC coded fronts with `scripts/snapshot.js`, then redeploys Hosting. GitHub's cron scheduler can skip runs for hours on new repositories, so each run loops every 10 minutes for about 5.5 hours and then starts the next run itself; the cron is only a backup.
+- Winds aloft (GFS), model guidance (HRRR, NBM, GFS, ECMWF IFS, decoded from GRIB2 by Open-Meteo) and the chart images load live, straight from the browser.
+- **2-page PDF brief:** after a run, the *2-page brief (PDF)* button downloads a letter-size brief (decision, surface sketch, terminals with alternate rules, factors, Collins analysis, route/altitude options, model guidance, winds, raw reports).
 - The page shows how old the weather data is. Over 20 minutes adds a caution, and over 45 minutes is a NO-GO until the data is refreshed.
 
 ### Setting up the refresh job
@@ -57,11 +58,20 @@ If a source fails, the briefing still runs, the failure is listed under **Data s
 5. Pressure centers within 600 nm are described, with movement and deepening/filling from the prog.
 6. The narrative explains the weather to expect from each relevant boundary (frontal type, speed, cold-season icing cues, terminal air masses) and what it means for this flight.
 
+## Model guidance (NWP)
+
+HRRR, NBM, GFS and ECMWF IFS point forecasts for the departure, destination and alternate windows: flight category from model visibility and an estimated cloud base (temperature/dew point spread where the model has low cloud), weather type, gusts, CAPE/lifted index and freezing level. The brief flags where two or more models are worse than the TAF, show freezing precipitation or thunderstorms the TAF lacks, or disagree widely. GFS pressure-level temperature and humidity also screen the route for icing-potential layers.
+
+## Route and altitude options
+
+Lateral offsets of the direct course (60, 120 and 180 nm each side, through two turn points snapped to nearby VORs) are scored for exposure to SIGMETs, Convective SIGMETs, CWAs, G-AIRMET icing/turbulence at altitude and time, severe/moderate PIREPs and thunderstorm METARs, plus the extra time. Cruise levels FL310-FL450 are compared on the filed route for wind component, ISA deviation, a rough fuel estimate and advisories at each level.
+
 ## Go/no-go logic (XLS+ defaults, all adjustable in the form)
 
 **NO-GO** items (any one stops the flight as planned):
 - Destination forecast below approach minimums at ETA ±1 h (default 200 ft / ½ SM); 135.219 under Part 135
-- Alternate required (91.169 1-2-3 rule, or approximated 135.223) but none filed; alternate below 600-2
+- Alternate required but none filed. Part 91: 91.169 (2,000 ft and 3 SM, ETA ±1 h). Part 135: 135.223(b) — ceiling 1,500 ft above the lowest circling MDA (or, if circling is not authorized, 1,500 ft above the lowest published minimum or 2,000 ft above the airport, whichever is higher) and visibility 3 SM or 2 SM above the lowest visibility minimum, whichever is greater, from 1 hour before to 1 hour after ETA. Enter chart figures in the form; blank fields use Category C estimates.
+- Alternate below its weather minimums: Part 135 uses standard OpSpec C055 derived minimums (+400 ft/+1 SM with one navigation facility, +200 ft/+½ SM with two), Part 91 uses 600-2 / 800-2. A high-minimums PIC option adds 100 ft and ½ SM (135.225).
 - Crosswind above 25 kt (max demonstrated) or tailwind above 10 kt on the best runway, using gusts
 - Freezing rain/drizzle at departure or destination
 - Thunderstorms in the prevailing TAF at departure/destination, or a Convective SIGMET over the climb/descent

@@ -39,6 +39,30 @@ $('sample').addEventListener('click', async (e) => {
   else { $('routeText').value = 'KTEB SBJ SAWED ORL KPBI'; $('alternate').value = 'KFLL'; }
 });
 $('printBtn').addEventListener('click', () => window.print());
+let lastBrief = null;
+$('pdfBtn').addEventListener('click', async () => {
+  if (!lastBrief) return;
+  const btn = $('pdfBtn'); btn.disabled = true;
+  try { await window.BriefPDF.download(lastBrief); } catch (e) { status('Could not make the PDF: ' + e.message, true); } finally { btn.disabled = false; }
+});
+
+// Show how old the weather snapshot is
+async function freshness() {
+  const cfg = window.PREFLIGHT_CONFIG || {};
+  if (!cfg.snapshot) return;
+  try {
+    const m = await (await fetch(`${cfg.snapshot}/meta.json?t=${Date.now()}`)).json();
+    const age = Math.round((Date.now() - Date.parse(m.generatedAt)) / 60e3);
+    const c = $('freshness');
+    c.hidden = false;
+    c.className = 'chip' + (age > 45 ? ' old' : age > 20 ? ' stale' : '');
+    c.textContent = `Weather data ${age} min old`;
+    c.title = `Snapshot generated ${m.generatedAt}`;
+  } catch (e) { /* ignore */ }
+}
+freshness(); setInterval(freshness, 60e3);
+const syncRules = () => { $('d135').open = $('rules').value === '135' || $('d135').open; };
+$('rules').addEventListener('change', syncRules);
 
 $('planForm').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -49,10 +73,12 @@ $('planForm').addEventListener('submit', async (e) => {
     fileText, filename: fileName, routeText: fileText ? '' : routeText,
     alternate: $('alternate').value.trim(), cruiseAlt: $('cruiseAlt').value, tas: $('tas').value,
     etd: etdLocal ? new Date(etdLocal).toISOString() : null, rules: $('rules').value,
+    destCircHaa: $('destCircHaa').value, destCircNa: $('destCircNa').checked, destHat: $('destHat').value, destVisMin: $('destVisMin').value,
+    altNavFacilities: $('altNavFacilities').value, altHat: $('altHat').value, altVisMin: $('altVisMin').value, highMinsPic: $('highMinsPic').checked,
     maxXwind: $('maxXwind').value, maxTailwind: $('maxTailwind').value, minCeiling: $('minCeiling').value, minVis: $('minVis').value, minRunway: $('minRunway').value,
   };
   $('go').disabled = true;
-  status('Loading METARs, TAFs, PIREPs, SIGMETs, G-AIRMETs, CWAs, WPC fronts and GFS winds…');
+  status('Loading METARs, TAFs, PIREPs, SIGMETs, G-AIRMETs, CWAs, WPC fronts, GFS winds and HRRR/NBM/GFS/ECMWF guidance…', false, true);
   try {
     // The briefing engine runs in the browser; feeds without CORS go through the configured relay.
     if (!window.PreflightEngine) throw new Error('Briefing engine failed to load. Reload the page.');
@@ -68,16 +94,18 @@ $('planForm').addEventListener('submit', async (e) => {
   }
 });
 
-function status(msg, err) {
+function status(msg, err, busy) {
   const s = $('status');
   s.hidden = false;
   s.className = 'status' + (err ? ' err' : '');
-  s.textContent = msg;
+  s.innerHTML = (busy ? '<span class="spin"></span>' : '') + esc(msg);
 }
 
 function render(b) {
   $('results').hidden = false;
   $('printBtn').hidden = false;
+  $('pdfBtn').hidden = false;
+  lastBrief = b;
   renderVerdict(b);
   renderFactors(b);
   renderMap(b);
@@ -89,30 +117,42 @@ function render(b) {
   renderEnroute(b);
   renderNotams(b);
   renderSources(b);
+  renderRouting(b);
+  renderModels(b);
   $('results').scrollIntoView({ behavior: 'smooth' });
 }
 
 function renderVerdict(b) {
-  const d = b.decision, p = b.plan;
+  const d = b.decision, p = b.plan, r = b.range || {};
   const cls = d.verdict === 'GO' ? 'v-go' : d.verdict === 'NO-GO' ? 'v-nogo' : 'v-caution';
+  const dest = b.stations.find((s) => s.role === 'destination');
+  const alt = b.routing && b.routing.altitude, rec = b.routing && b.routing.route && b.routing.route.recommendation;
+  const stat = (k, v, s) => `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${v}</div>${s ? `<div class="s">${s}</div>` : ''}</div>`;
   $('verdict').className = `card verdict ${cls}`;
   $('verdict').innerHTML = `
-    <div class="vhead"><span class="vword">${esc(d.verdict)}</span><span>${esc(d.headline)}</span></div>
+    <div class="vhead"><span class="vword">${esc(d.verdict)}</span><span class="vline">${esc(d.headline)}</span></div>
+    <div class="stats">
+      ${stat('Route', `${esc(p.dep)} → ${esc(p.dest)}`, p.alternate ? `alternate ${esc(p.alternate)}` : 'no alternate filed')}
+      ${stat('Distance / ETE', `${p.distanceNm} nm · ${Math.floor(p.eteMin / 60)}:${String(p.eteMin % 60).padStart(2, '0')}`, `FL${Math.round(p.cruiseAlt / 100)} · ${p.tas} KTAS`)}
+      ${stat('ETD → ETA', `${z(p.etd)} → ${z(p.eta)}`, `${esc(local(p.etd))} → ${esc(local(p.eta))} local`)}
+      ${stat('Wind / range', `${r.avgWindComponentKt != null ? (r.avgWindComponentKt > 0 ? '+' : '') + r.avgWindComponentKt + ' kt' : '—'}`, `${r.equivalentStillAirNm ?? '—'} of ~${r.stillAirRangeNm ?? '—'} ESAD nm`)}
+      ${dest && dest.altTest ? stat(`Alternate (${dest.altTest.rule})`, dest.alternateRequired ? 'Required' : 'Not required', `needs ${dest.altTest.ceilNeed.toLocaleString()} ft / ${dest.altTest.visNeed} SM`) : ''}
+      ${alt ? stat('Best altitude', `FL${alt.best}`, 'weather, wind and fuel') : ''}
+      ${rec ? stat('Route option', rec.keepFiled ? 'Keep filed' : 'Re-route', rec.keepFiled ? '' : esc(rec.best.name)) : ''}
+    </div>
     <div class="meta">
-      <span><b>${esc(p.dep)} → ${esc(p.dest)}</b>${p.alternate ? ` (alt ${esc(p.alternate)})` : ''}</span>
       <span>Route <b>${esc(p.route.map((w) => w.id).join(' '))}</b></span>
-      <span><b>${p.distanceNm} nm</b> · FL${Math.round(p.cruiseAlt / 100)} · ${p.tas} KTAS</span>
-      <span>ETD <b>${z(p.etd)}</b> (${local(p.etd)}) · ETA <b>${z(p.eta)}</b> (${local(p.eta)}) · ETE ${Math.floor(p.eteMin / 60)}:${String(p.eteMin % 60).padStart(2, '0')}</span>
       <span>Part ${esc(p.rules)} · ${esc(b.aircraft.name)}</span>
       <span>Generated ${z(b.generatedAt)}${b.dataAsOf ? ` · weather data as of <b>${z(b.dataAsOf)}</b> (${Math.round((Date.now() - Date.parse(b.dataAsOf)) / 60e3)} min old)` : ''}</span>
     </div>
-    <ul class="reason">${d.reasoning.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>`;
+    <ul class="reason">${d.reasoning.map((x) => `<li>${esc(x)}</li>`).join('')}</ul>`;
 }
 
 function renderFactors(b) {
   const f = b.factors;
+  const groups = [['nogo', 'Limiting'], ['caution', 'Needs a plan'], ['info', 'For awareness'], ['ok', 'Checked and OK']];
   $('factors').innerHTML = f.length
-    ? f.map((x) => `<div class="factor ${x.level}"><div class="t"><span class="pill ${x.level}">${LEVEL[x.level]}</span>${esc(x.title)}</div><div class="d">${esc(x.detail)}</div></div>`).join('')
+    ? groups.map(([lv, title]) => { const list = f.filter((x) => x.level === lv); return list.length ? `<div class="fgroup">${title} (${list.length})</div>` + list.map((x) => `<div class="factor ${x.level}"><div class="t"><span class="pill ${x.level}">${LEVEL[x.level]}</span>${esc(x.title)}</div><div class="d">${esc(x.detail)}</div></div>`).join('') : ''; }).join('')
     : '<p>No significant factors found.</p>';
 }
 
@@ -156,7 +196,8 @@ function renderTerminals(b) {
       ${s.metar ? `<div class="raw"><span class="pill ${s.metar.category}">${s.metar.category}</span>${esc(s.metar.raw)}</div>` : '<div class="raw">No METAR</div>'}
       ${s.taf ? `<div class="raw">${esc(s.taf)}</div>` : '<div class="raw">No TAF</div>'}
       ${j ? `<div>Planning conditions: ceiling <b>${j.ceiling ?? 'none'}</b> ft, visibility <b>${j.vis ?? '—'}</b> SM, <span class="pill ${j.category}">${j.category}</span>${s.forecast && s.forecast.worst && s.forecast.worst.category !== j.category ? ` worst TEMPO/PROB <span class="pill ${s.forecast.worst.category}">${s.forecast.worst.category}</span>` : ''}</div>` : ''}
-      ${s.alternateRequired != null ? `<div>Alternate required: <b>${s.alternateRequired ? 'Yes' : 'No'}</b></div>` : ''}
+      ${s.altTest ? `<div class="rule"><span class="pill ${s.alternateRequired ? 'caution' : 'ok'}">${s.alternateRequired ? 'Alt req' : 'No alt'}</span><span><b>${esc(s.altTest.rule)}</b>: needs ≥ ${s.altTest.ceilNeed.toLocaleString()} ft and ${s.altTest.visNeed} SM from ETA−1 h to ETA+1 h (${esc(s.altTest.basis)}). Forecast ${s.altTest.prevailing.ceiling != null ? s.altTest.prevailing.ceiling + ' ft' : 'no ceiling'} / ${s.altTest.prevailing.vis ?? '—'} SM${s.altTest.worst && !s.altTest.worst.ok ? `, TEMPO/PROB ${s.altTest.worst.ceiling ?? 'no ceiling'} / ${s.altTest.worst.vis ?? '—'} SM` : ''}.</span></div>` : ''}
+      ${s.altMins ? `<div class="rule"><span class="pill ${s.altMins.ok ? 'ok' : 'nogo'}">${s.altMins.ok ? 'Legal alt' : 'Below'}</span><span><b>${esc(s.altMins.rule)}</b>: alternate minimums ${s.altMins.ceil} ft / ${s.altMins.vis} SM (${esc(s.altMins.basis)}).</span></div>` : ''}
       ${rw && !rw.none ? `<div>Wind used ${windStr(s.windUsed)} → best runway <b>${esc(rw.id)}</b> (${rw.len} ft): <span class="${rw.head < 0 ? 'head' : ''}">${rw.head >= 0 ? 'head' : 'tail'} ${Math.abs(rw.head)} kt</span>, crosswind ${rw.cross}${rw.crossG !== rw.cross ? ` (gust ${rw.crossG})` : ''} kt</div>` : ''}
       ${s.tafPeriods && s.tafPeriods.length ? `<div class="table-wrap"><table><tr><th>Group</th><th>Valid</th><th>Wind</th><th>Vis</th><th>Ceiling</th><th>Wx</th></tr>${s.tafPeriods.map((p) => `<tr><td>${esc(p.change)}${p.probability ? ' ' + p.probability : ''}</td><td>${z(p.from)}–${z(p.to)}</td><td>${windStr(p.wind)}</td><td>${p.vis ?? '—'}</td><td>${p.ceiling ?? '—'}</td><td>${esc(p.wx)}</td></tr>`).join('')}</table></div>` : ''}
     </div>`;
@@ -208,4 +249,36 @@ function renderSources(b) {
   $('sources').innerHTML = b.sources.map((s) => `<div class="src"><span class="${s.ok ? 'ok' : 'bad'}">${s.ok ? '✓' : '✗'}</span><span><b>${esc(s.name)}</b> · ${esc(s.desc)}</span></div>`).join('')
     + (b.errors.length ? `<h3>Issues</h3>${b.errors.map((e) => `<div class="hint">${esc(e.source)}: ${esc(e.error)}</div>`).join('')}` : '')
     + `<p class="hint">${esc(b.disclaimer)}</p>`;
+}
+
+function renderRouting(b) {
+  const r = b.routing;
+  if (!r) { $('routing').innerHTML = '<p>Route options unavailable.</p>'; return; }
+  const rec = r.route.recommendation, alt = r.altitude;
+  const hm = (m) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+  $('routing').innerHTML = `
+    <div class="rec ${rec.keepFiled ? '' : 'change'}"><b>${rec.keepFiled ? 'Keep the filed route' : `Consider ${esc(rec.best.name)}`}</b>${esc(rec.text)}${!rec.keepFiled && rec.best.routeString ? `<div class="raw">${esc(rec.best.routeString)}</div>` : ''}</div>
+    <h3>Lateral options</h3>
+    <div class="table-wrap"><table><tr><th>Option</th><th>Distance</th><th>ETE</th><th>Weather exposure</th><th>Meets</th></tr>
+    ${r.route.candidates.map((c) => `<tr class="${!rec.keepFiled && c === rec.best || (!rec.keepFiled && rec.best && c.name === rec.best.name) ? 'best' : ''}"><td>${esc(c.name)}${c.routeString ? `<div class="hint"><code>${esc(c.routeString)}</code></div>` : ''}</td><td class="num">${c.distanceNm} nm</td><td class="num">${hm(c.eteMin)}</td><td class="num">${c.score}</td><td>${c.hits.length ? esc(c.hits.join('; ')) : '—'}</td></tr>`).join('')}
+    </table></div>
+    <h3>Altitude options on the filed route</h3>
+    <p>${esc(alt.text)}</p>
+    <div class="table-wrap"><table><tr><th>Level</th><th>ETE</th><th>Wind comp</th><th>ISA dev</th><th>Fuel (est.)</th><th>Advisories at level</th></tr>
+    ${alt.rows.map((x) => `<tr class="${x.fl === alt.best ? 'best' : ''}"><td>FL${x.fl}</td><td class="num">${hm(x.eteMin)}</td><td class="num ${x.windComponent < 0 ? 'head' : 'tail'}">${x.windComponent == null ? '—' : (x.windComponent > 0 ? '+' : '') + x.windComponent + ' kt'}</td><td class="num">${x.isaDev == null ? '—' : (x.isaDev > 0 ? '+' : '') + x.isaDev + '°C'}</td><td class="num">${x.fuelLb.toLocaleString()} lb</td><td>${x.hits.length ? esc(x.hits.join('; ')) : '—'}</td></tr>`).join('')}
+    </table></div>
+    <p class="hint">Exposure counts nm inside SIGMETs, Convective SIGMETs (20 nm buffer), CWAs and G-AIRMET icing/turbulence at your altitude and time, plus severe/moderate PIREPs and thunderstorm METARs near the path. Fuel is a rough XLS+ planning estimate. Options are offsets of the direct course; file through ATC-preferred routes and check airspace.</p>`;
+}
+
+function renderModels(b) {
+  const m = b.models;
+  if (!m || !m.available) { $('models').innerHTML = '<p>Model guidance did not load (Open-Meteo did not respond). The rest of the briefing is unaffected.</p>'; return; }
+  const catPill = (c) => `<span class="pill ${esc(c)}">${esc(c)}</span>`;
+  $('models').innerHTML = m.stations.map((s) => `
+    <h3>${esc(s.id)} · ${esc(s.role)} <span class="hint">${z(s.window[0])}–${z(s.window[1])}${s.consensus ? ` · consensus ${s.consensus}${s.spread >= 2 ? ', low agreement' : ''}` : ''}</span></h3>
+    ${s.models.length ? `<div class="table-wrap"><table><tr><th>Model</th><th>Category</th><th>Est. cloud base</th><th>Visibility</th><th>Weather</th><th>Wind (max)</th><th>CAPE / LI</th><th>Freezing level</th><th>Temp / dew pt</th></tr>
+      ${s.models.map((x) => `<tr><td><b>${esc(x.model)}</b></td><td>${catPill(x.category)}</td><td class="num">${x.ceilingEst != null ? x.ceilingEst.toLocaleString() + ' ft' : '—'}</td><td class="num">${x.vis != null ? x.vis + ' SM' : '—'}</td><td>${esc(x.wx || '—')}</td><td class="num">${x.windMax ?? '—'}${x.gustMax ? 'G' + x.gustMax : ''} kt</td><td class="num">${x.capeMax ?? '—'} / ${x.liMin != null ? Math.round(x.liMin) : '—'}</td><td class="num">${x.frzFt != null ? x.frzFt.toLocaleString() + ' ft' : '—'}</td><td class="num">${x.temp}° / ${x.dewp ?? '—'}°</td></tr>`).join('')}
+    </table></div>` : '<p class="hint">No model data for this location (HRRR and NBM cover the CONUS only).</p>'}`).join('')
+    + (m.icingLayers && m.icingLayers.length ? `<h3>Icing-potential layers on the route (GFS)</h3><p>${m.icingLayers.slice(0, 10).map((x) => `~${x.ft.toLocaleString()} ft at ${x.alongNm} nm (${x.T}°C, RH ${x.RH}%)`).join(' · ')}</p>` : '')
+    + `<p class="hint">${esc(m.source)}. Cloud base is estimated from the model temperature/dew point spread where the model has low cloud, so treat it as a trend, not a ceiling. The brief flags where two or more models are worse than the TAF.</p>`;
 }

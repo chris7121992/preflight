@@ -294,6 +294,10 @@
     L.polyline(route, { color: '#fff', weight: 7, opacity: 0.9 }).addTo(groups.route);
     L.polyline(route, { color: '#111', weight: 3.5 }).addTo(groups.route);
     for (const w of b.plan.route) L.circleMarker([w.lat, w.lon], { radius: 4.5, color: '#111', fillColor: '#fff', fillOpacity: 1, weight: 2 }).bindTooltip(w.id, { permanent: b.plan.route.length <= 10, direction: 'right', className: 'wp-label' }).addTo(groups.route);
+    const rec = b.routing && b.routing.route && b.routing.route.recommendation;
+    if (rec && !rec.keepFiled && rec.best && rec.best.points) {
+      L.polyline(rec.best.points.map((p) => [p.lat, p.lon]), { color: '#16a34a', weight: 3.5, dashArray: '9 7' }).bindTooltip(`Suggested re-route: ${rec.best.name}`, { sticky: true }).addTo(groups.route);
+    }
     for (const f of (b.surface && b.surface.fronts) || []) if (f.crossesRoute && f.encounter) {
       L.circleMarker([f.encounter.lat, f.encounter.lon], { radius: 8, color: '#b45309', weight: 3, fill: false }).bindTooltip(`Meets ${f.name} ~${z(Date.parse(f.encounter.time))} (${f.encounter.alongRouteNm} nm)`).addTo(groups.route);
     }

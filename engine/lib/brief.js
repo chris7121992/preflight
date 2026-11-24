@@ -7,6 +7,8 @@ const fronts = require('./fronts');
 const dec = require('./decode');
 const { CE56X } = require('./aircraft');
 const collins = require('./collins');
+const nwp = require('./nwp');
+const routing = require('./routing');
 
 const fmtZ = (ms) => {
   const d = new Date(ms);
@@ -165,7 +167,18 @@ async function buildBriefing(plan, input) {
     minVis: Number(input.minVis) || 0.5,
     minRunwayFt: Number(input.minRunway) || CE56X.minRunwayFt,
     alternate: (input.alternate || '').toUpperCase().trim() || null,
+    // Approach figures for the 135.223 / alternate-minimums tests. Defaults are generic Category C estimates;
+    // the pilot should enter the values from the charts for the procedures actually planned.
+    destCircHaa: input.destCircHaa === '' || input.destCircHaa == null ? 600 : Number(input.destCircHaa),
+    destCircNa: !!input.destCircNa,
+    destHat: Number(input.destHat) || 200,
+    destVisMin: Number(input.destVisMin) || 0.5,
+    altNavFacilities: input.altNavFacilities === '2' ? 2 : input.altNavFacilities === 'std' ? 'std' : 1,
+    altHat: Number(input.altHat) || 200,
+    altVisMin: Number(input.altVisMin) || 0.5,
+    highMinsPic: !!input.highMinsPic,
   };
+  if (opts.highMinsPic) { opts.minCeiling += 100; opts.minVis += 0.5; }
   if (!isFinite(opts.etd)) opts.etd = Date.now() + 3600e3;
 
   const route = await resolveRoute(plan, errors);
@@ -236,6 +249,36 @@ async function buildBriefing(plan, input) {
       });
     });
   }
+
+  // Upper-air summary at each winds point (850/700/500 mb): Collins' upper-support and stability checks, model icing screen
+  const upper = wm ? windPts.map((p, i) => {
+    const smp = S.reduce((a, b) => (Math.abs(b.s - p.s) < Math.abs(a.s - p.s) ? b : a));
+    const g = (k) => wm.at(i, smp.t, k);
+    return { lat: p.lat, lon: p.lon, s: p.s, d500: g('wind_direction_500hPa'), s500: g('wind_speed_500hPa'), t500: g('temperature_500hPa'), d700: g('wind_direction_700hPa'), s700: g('wind_speed_700hPa'), t700: g('temperature_700hPa'), d850: g('wind_direction_850hPa'), s850: g('wind_speed_850hPa'), t850: g('temperature_850hPa'), rh850: g('relative_humidity_850hPa'), rh700: g('relative_humidity_700hPa'), rh500: g('relative_humidity_500hPa') };
+  }) : [];
+  // Wind component and ISA deviation at any flight level, for the altitude comparison
+  const windAt = wm ? (ft) => {
+    const avail = (wa.levels || []).filter((l) => wm.pts.some((p) => p.h[`wind_speed_${l}hPa`]));
+    if (!avail.length) return null;
+    const want = wx.altToHpa(ft);
+    const l = avail.reduce((a, b) => (Math.abs(b - want) < Math.abs(a - want) ? b : a));
+    const comp = (s, trk) => {
+      const idx = windPts.reduce((bi, p, i) => (Math.abs(p.s - s) < Math.abs(windPts[bi].s - s) ? i : bi), 0);
+      const t = opts.etd + (s / opts.tas) * 3600e3;
+      const ws = wm.at(idx, t, `wind_speed_${l}hPa`), wd = wm.at(idx, t, `wind_direction_${l}hPa`);
+      return ws == null || wd == null ? 0 : -ws * Math.cos(geo.rad(geo.angleDiff(wd, trk)));
+    };
+    const cs = [], isa = [];
+    windPts.forEach((p, i) => {
+      const t = opts.etd + (p.s / opts.tas) * 3600e3;
+      const trk = geo.bearing(S[Math.max(0, S.findIndex((x) => x.s >= p.s) - 1)] || dep, S[Math.min(S.length - 1, S.findIndex((x) => x.s >= p.s) + 1)] || dest);
+      const ws = wm.at(i, t, `wind_speed_${l}hPa`), wd = wm.at(i, t, `wind_direction_${l}hPa`), tt = wm.at(i, t, `temperature_${l}hPa`);
+      if (ws != null && wd != null) cs.push(-ws * Math.cos(geo.rad(geo.angleDiff(wd, trk))));
+      if (tt != null) isa.push(tt - Math.max(-56.5, 15 - 1.98 * Math.min(36089, ft) / 1000));
+    });
+    const avg = (a) => (a.length ? Math.round(a.reduce((x, y) => x + y, 0) / a.length) : null);
+    return { comp, avg: avg(cs), isa: avg(isa), level: l };
+  } : null;
 
   // ---- factors
   const factors = [];
@@ -349,12 +392,25 @@ async function buildBriefing(plan, input) {
     if (role === 'destination') {
       if (belowMins(fc)) add('nogo', 'Ceiling/Vis', `${id}: forecast below approach minimums at ETA`, `${station.judgedFrom} for ${fmtZ(win[0])}-${fmtZ(win[1])} shows ceiling ${fc.ceiling ?? 'none'} ft / visibility ${fc.vis ?? '?'} SM, below the planning minimums of ${opts.minCeiling} ft / ${opts.minVis} SM.${opts.rules === '135' ? ' 14 CFR 135.219 prohibits departing for a destination forecast below authorized IFR landing minimums at ETA.' : ' Part 91 does not prohibit the departure, but there is no reasonable expectation of landing.'}`, id);
       else if (worst && belowMins(worst)) add('caution', 'Ceiling/Vis', `${id}: TEMPO/PROB conditions below minimums`, `Temporary groups in the ETA window drop to ceiling ${worst.ceiling ?? 'none'} ft / ${worst.vis ?? '?'} SM. Carry extra fuel for holding and a solid alternate.`, id);
-      // Alternate required?
+      // Alternate required?  Part 91: 91.169 (1-2-3).  Part 135: 135.223(b).
       const c = fc;
-      const altReq = opts.rules === '135' ? (c.ceiling != null && c.ceiling < 2500) || (c.vis != null && c.vis < 3) : (c.ceiling != null && c.ceiling < 2000) || (c.vis != null && c.vis < 3);
-      const altReqWorst = worst && (opts.rules === '135' ? (worst.ceiling != null && worst.ceiling < 2500) || (worst.vis != null && worst.vis < 3) : (worst.ceiling != null && worst.ceiling < 2000) || (worst.vis != null && worst.vis < 3));
-      station.alternateRequired = !!(altReq || altReqWorst);
-      if (station.alternateRequired && !opts.alternate) add('nogo', 'Alternate', `${id}: alternate required but none filed`, opts.rules === '135' ? `Forecast at ETA ±1 h does not meet the 135.223 exemption (approximated here as ceiling ≥ 2,500 ft and visibility ≥ 3 SM; the exact test is 1,500 ft above the lowest circling MDA and 3 SM or 2 SM above the lowest visibility minimum). Add an alternate.` : `Forecast for ETA ±1 h is below 2,000 ft ceiling or 3 SM visibility, so 14 CFR 91.169 (the 1-2-3 rule) requires an alternate. Add one.`, id);
+      let altTest;
+      if (opts.rules === '135') {
+        const ceilNeed = opts.destCircNa ? Math.max(opts.destHat + 1500, 2000) : Math.max(opts.destCircHaa + 1500, 0);
+        const visNeed = Math.max(3, opts.destVisMin + 2);
+        altTest = { rule: '135.223(b)', ceilNeed, visNeed, basis: opts.destCircNa ? `circling not authorized: 1,500 ft above the lowest published minimum (HAT ${opts.destHat} ft) or 2,000 ft above the airport, whichever is higher` : `1,500 ft above the lowest circling MDA (HAA ${opts.destCircHaa} ft)`, visBasis: `3 SM, or 2 SM more than the lowest visibility minimum (${opts.destVisMin} SM), whichever is greater` };
+      } else altTest = { rule: '91.169(b)', ceilNeed: 2000, visNeed: 3, basis: '2,000 ft', visBasis: '3 SM' };
+      const fails = (w) => w && ((w.ceiling != null && w.ceiling < altTest.ceilNeed) || (w.vis != null && w.vis < altTest.visNeed));
+      altTest.prevailing = { ceiling: c.ceiling, vis: c.vis, ok: !fails(c) };
+      altTest.worst = worst ? { ceiling: worst.ceiling, vis: worst.vis, ok: !fails(worst) } : null;
+      station.alternateRequired = !!(fails(c) || fails(worst));
+      altTest.required = station.alternateRequired;
+      station.altTest = altTest;
+      const wxTxt = `Forecast for ${fmtZ(win[0])}-${fmtZ(win[1])}: ${c.ceiling != null ? `ceiling ${c.ceiling} ft` : 'no ceiling'}, visibility ${c.vis ?? '?'} SM${worst && (worst.ceiling !== c.ceiling || worst.vis !== c.vis) ? ` (TEMPO/PROB down to ${worst.ceiling != null ? worst.ceiling + ' ft' : 'no ceiling'} / ${worst.vis ?? '?'} SM)` : ''}.`;
+      const needTxt = `${altTest.rule} needs a ceiling of at least ${altTest.ceilNeed.toLocaleString('en-US')} ft (${altTest.basis}) and visibility of at least ${altTest.visNeed} SM (${altTest.visBasis}) from 1 hour before to 1 hour after ETA.`;
+      if (station.alternateRequired && !opts.alternate) add('nogo', 'Alternate', `${id}: alternate required (${altTest.rule}) but none filed`, `${wxTxt} ${needTxt} Add an alternate${opts.rules === '135' ? ', and carry fuel to the destination, then the alternate, then 45 minutes at normal cruise (135.223(a))' : ''}.`, id);
+      else if (station.alternateRequired) add('info', 'Alternate', `${id}: alternate required (${altTest.rule})`, `${wxTxt} ${needTxt} You have filed ${opts.alternate}${opts.rules === '135' ? '; fuel must cover destination, alternate and 45 minutes at normal cruise (135.223(a))' : ''}.`, id);
+      else add('ok', 'Alternate', `${id}: no alternate required (${altTest.rule})`, `${wxTxt} ${needTxt}${opts.rules === '135' && opts.destCircHaa === 600 && !opts.destCircNa ? ' The circling HAA used is a 600 ft Category C estimate; enter the chart value for an exact test.' : ''}`, id);
       if (fc.flags && fc.flags.freezingPrecip) add('nogo', 'Icing', `${id}: freezing precipitation forecast at ETA`, `Freezing rain/drizzle is outside the XLS+ ice protection certification (Appendix C) and contaminates the runway. Delay or divert.`, id);
       if (worst && worst.flags && worst.flags.freezingPrecip && !(fc.flags && fc.flags.freezingPrecip)) add('caution', 'Icing', `${id}: freezing precipitation possible (TEMPO/PROB)`, `Have a non-freezing alternate and fuel to reach it.`, id);
     }
@@ -364,11 +420,21 @@ async function buildBriefing(plan, input) {
       if (cur && cur.temp != null && cur.temp <= 5 && Object.keys(cur.flags).some((k) => ['snow', 'freezingPrecip', 'icePellets'].includes(k))) add('caution', 'Icing', `${id}: frozen precipitation at departure`, `Ground de-icing/anti-icing likely required; check holdover times and runway condition codes (RwyCC).`, id);
     }
     if (role === 'alternate') {
-      const okPrecision = (c) => (c.ceiling == null || c.ceiling >= 600) && (c.vis == null || c.vis >= 2);
-      const okNonPrecision = (c) => (c.ceiling == null || c.ceiling >= 800) && (c.vis == null || c.vis >= 2);
-      if (!okPrecision(fc)) add('nogo', 'Alternate', `${id}: below standard alternate minimums`, `Forecast at ETA: ceiling ${fc.ceiling ?? 'none'} ft / ${fc.vis ?? '?'} SM, below 600-2 (precision) and 800-2 (non-precision). Choose another alternate.`, id);
-      else if (!okNonPrecision(fc)) add('caution', 'Alternate', `${id}: meets alternate minimums only with a precision approach`, `Forecast ${fc.ceiling} ft / ${fc.vis} SM meets 600-2 but not 800-2. Verify the alternate has an operating precision approach and no "NA" alternate note.`, id);
-      else add('ok', 'Alternate', `${id}: meets standard alternate minimums`, `Forecast at ETA meets 800-2.`, id);
+      // Alternate weather minimums. Part 135: 135.221(b) -> OpSpec C055 (standard derived minimums);
+      // Part 91: 91.169(c) standard 600-2 (precision) / 800-2 (non-precision).
+      const fcA = fc;
+      let am;
+      if (opts.rules === '135' && opts.altNavFacilities !== 'std') {
+        const add1 = opts.altNavFacilities === 2 ? [200, 0.5] : [400, 1];
+        am = { rule: 'OpSpec C055 (135.221)', ceil: opts.altHat + add1[0], vis: opts.altVisMin + add1[1], basis: opts.altNavFacilities === 2 ? `two operational navigation facilities to different suitable runways: +200 ft and +½ SM to the higher of the two approaches (HAT ${opts.altHat} ft, ${opts.altVisMin} SM entered)` : `one operational navigation facility: +400 ft to the HAT/HAA and +1 SM to the landing visibility (HAT ${opts.altHat} ft, ${opts.altVisMin} SM entered)` };
+      } else am = { rule: opts.rules === '135' ? '135.221 / 91.169(c)' : '91.169(c)', ceil: 600, vis: 2, ceilNp: 800, basis: '600-2 with a precision approach, 800-2 non-precision' };
+      const okA = (w, ce) => (w.ceiling == null || w.ceiling >= ce) && (w.vis == null || w.vis >= am.vis);
+      station.altMins = { ...am, forecast: { ceiling: fcA.ceiling, vis: fcA.vis }, ok: okA(fcA, am.ceil) };
+      const fTxt = `Forecast at the alternate ETA: ${fcA.ceiling != null ? `ceiling ${fcA.ceiling} ft` : 'no ceiling'} / ${fcA.vis ?? '?'} SM.`;
+      if (!okA(fcA, am.ceil)) add('nogo', 'Alternate', `${id}: below alternate minimums (${am.rule})`, `${fTxt} Required ${am.ceil} ft / ${am.vis} SM (${am.basis}). It cannot be listed as an alternate; choose another.`, id);
+      else if (am.ceilNp && !okA(fcA, am.ceilNp)) add('caution', 'Alternate', `${id}: meets alternate minimums only with a precision approach`, `${fTxt} Meets 600-2 but not 800-2. Verify the alternate has an operating precision approach and no "NA" alternate note.`, id);
+      else add('ok', 'Alternate', `${id}: meets alternate minimums (${am.rule})`, `${fTxt} Required ${am.ceil} ft / ${am.vis} SM (${am.basis}).${opts.rules === '135' ? ' Confirm against your own OpSpec C055 and the alternate\'s approach notes.' : ''}`, id);
+      if (worst && !okA(worst, am.ceil)) add('caution', 'Alternate', `${id}: TEMPO/PROB below alternate minimums`, `Temporary conditions drop to ${worst.ceiling ?? 'none'} ft / ${worst.vis ?? '?'} SM. Many operators do not accept an alternate whose TEMPO is below minimums; check your SOPs.`, id);
     }
     // Weather flags common to all
     const flagsAll = Object.assign({}, cur ? cur.flags : {}, worst ? worst.flags : {});
@@ -525,12 +591,6 @@ async function buildBriefing(plan, input) {
     const sections = [...fronts.parseCoded(codsus, ref), ...(codsrp ? fronts.parseCoded(codsrp, ref) : [])];
     surface = fronts.interpretRoute(sections, S, { corridorNm: 400 });
     if (surface.available) {
-      // Upper-air summary at each winds point (850/700/500 mb), used for Collins' upper-support and stability checks
-      const upper = wm ? windPts.map((p, i) => {
-        const smp = S.reduce((a, b) => (Math.abs(b.s - p.s) < Math.abs(a.s - p.s) ? b : a));
-        const g = (k) => wm.at(i, smp.t, k);
-        return { lat: p.lat, lon: p.lon, s: p.s, d500: g('wind_direction_500hPa'), s500: g('wind_speed_500hPa'), t500: g('temperature_500hPa'), d700: g('wind_direction_700hPa'), s700: g('wind_speed_700hPa'), d850: g('wind_direction_850hPa'), s850: g('wind_speed_850hPa'), t850: g('temperature_850hPa') };
-      }) : [];
       const c = collins.analyze(surface, { S, dep, dest, prof, stations, opts, upper, regional: regionalMetars || enrouteMetars || [] });
       surface.method = 'Richard L. Collins, Flying the Weather Map';
       surface.narrative = c.paras;
@@ -550,6 +610,29 @@ async function buildBriefing(plan, input) {
       if (f.depPassage) add('info', 'Surface analysis', `${cap(f.name)} near ${dep.id} around ${fmtZ(Date.parse(f.depPassage))}`, `Expect the wind shift and frontal weather at the departure field around then (ETD ${fmtZ(opts.etd)}).`, dep.id);
     }
   }
+
+  // ---- NWP model guidance (HRRR / NBM / GFS / ECMWF) at the terminals
+  const nwpStations = stations.map((st) => {
+    const a = aptInfo[st.id] || (st.id === dep.id ? dep : st.id === dest.id ? dest : null);
+    if (!a || !isFinite(a.lat)) return null;
+    return { id: st.id, role: st.role, lat: a.lat, lon: a.lon, from: Date.parse(st.window[0]), to: Date.parse(st.window[1]), tafCategory: st.judgedFrom === 'TAF' && st.judged ? st.judged.category : null, tafFlags: st.forecast && st.forecast.worst ? st.forecast.worst.flags : null };
+  }).filter(Boolean);
+  const nwpRaw = nwpStations.length ? await wx.safe('Model guidance (HRRR/NBM/GFS/ECMWF)', () => wx.nwpPoints(nwpStations), errors) : null;
+  const models = { available: !!nwpRaw, source: 'NOAA HRRR, NBM and GFS and ECMWF IFS, decoded from GRIB2 by Open-Meteo', stations: nwp.analyze(nwpRaw, nwpStations, add) };
+  const ice = nwp.icingLayers(upper);
+  models.icingLayers = ice;
+  if (ice.length) {
+    const near = ice.filter((x) => x.alongNm <= prof.climbNm + 60 || x.alongNm >= prof.totalNm - prof.descNm - 60);
+    if (near.length && !hazards.some((h) => h.kind === 'G-AIRMET' && h.hazard === 'ICE')) add('caution', 'Icing', 'GFS shows an icing-potential layer in the climb or descent', `Saturated air (RH ≥ 85%) at 0 to -18°C: ${near.slice(0, 4).map((x) => `~${x.ft.toLocaleString('en-US')} ft at ${x.alongNm} nm (${x.T}°C, ${x.RH}%)`).join('; ')}. No G-AIRMET covers it, but the model says the cloud there is in the icing temperature range. Plan anti-ice use and a continuous climb/descent through it.`, 'models');
+  }
+
+  // ---- route and altitude options based on the weather
+  const hzInputs = { sigmets, isigmets, gairmets, cwas, pireps, tsMetars: tsEnroute };
+  const navaidsAll = await wx.allNavaids().catch(() => null);
+  const routeOpts = routing.routeOptions({ route, opts, buildProfile, hazards: hzInputs, navaids: navaidsAll, windComp });
+  const altOpts = routing.altitudeOptions({ route, opts, buildProfile, hazards: hzInputs, windAt });
+  if (!routeOpts.recommendation.keepFiled) add('info', 'Routing', `Weather re-route option: ${routeOpts.recommendation.best.name}`, routeOpts.recommendation.text, 'routing');
+  if (altOpts.best !== Math.round(opts.cruiseAlt / 1000) * 10 && !/as good as any/.test(altOpts.text)) add('info', 'Routing', `Altitude option: FL${altOpts.best}`, altOpts.text, 'routing');
 
   // NOTAMs
   const notamInfo = notams
@@ -593,6 +676,8 @@ async function buildBriefing(plan, input) {
     windsSource: wa ? wa.source : null,
     range: rangeCheck,
     surface,
+    models,
+    routing: { route: routeOpts, altitude: altOpts },
     charts: wx.wpc.charts(),
     notams: notamInfo,
     sources: sourceList(errors),
@@ -658,6 +743,7 @@ function sourceList(errors) {
     ['Winds aloft (GFS via Open-Meteo)', 'NOAA GFS via Open-Meteo (AWC FB tables were retired in 2026)'],
     ['En-route METARs', 'aviationweather.gov Data API'],
     ['Regional METARs', 'aviationweather.gov Data API (for Collins-method contrast, moisture and upstream checks)'],
+    ['Model guidance (HRRR/NBM/GFS/ECMWF)', 'NOAA HRRR/NBM/GFS and ECMWF IFS point forecasts, decoded from GRIB2 by Open-Meteo'],
     ['NOTAMs (FAA API)', 'FAA NOTAM API (optional credentials)'],
   ].map(([name, desc]) => ({ name, desc, ok: !failed.has(name) }));
 }

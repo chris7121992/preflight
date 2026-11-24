@@ -1,22 +1,30 @@
 # Refreshes the weather snapshot and redeploys Firebase Hosting (free Spark plan, no Cloud Functions).
 # Needs repository secret FIREBASE_SERVICE_ACCOUNT: the JSON key of a service account with Firebase Hosting Admin.
+#
+# GitHub's cron scheduler is unreliable for new repositories (it can skip runs for hours), so each run keeps
+# itself alive: it refreshes every 10 minutes for about 5.5 hours, then starts the next run with
+# workflow_dispatch. A push or a cron run cancels the running loop and starts a fresh one with the new code.
 name: Refresh weather
 
 on:
   schedule:
-    - cron: '*/10 * * * *'   # GitHub may delay scheduled runs by several minutes at busy times
+    - cron: '*/10 * * * *'   # backup only; the loop below is the main timer
   workflow_dispatch:
   push:
     branches: [main]
 
 concurrency:
   group: refresh-weather
-  cancel-in-progress: false
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write   # to start the next loop run
 
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 350
     steps:
       - uses: actions/checkout@v5
 
@@ -27,16 +35,28 @@ jobs:
       - name: Build briefing engine
         run: npm run build
 
-      - name: Pull weather snapshot
+      - name: Refresh and deploy every 10 minutes
         env:
           SITE_URL: https://preflight-29da3.web.app
-        run: node scripts/snapshot.js
-
-      - name: Deploy to Firebase Hosting
-        env:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
         run: |
           echo "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/sa.json"
           export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
-          npx -y firebase-tools@15.37.0 deploy --only hosting --project preflight-29da3 --non-interactive --message "weather refresh ${{ github.run_id }}"
+          npm i -g firebase-tools@15.37.0 >/dev/null 2>&1
+          end=$(( $(date +%s) + 330*60 ))
+          while [ "$(date +%s)" -lt "$end" ]; do
+            start=$(date +%s)
+            if node scripts/snapshot.js; then
+              firebase deploy --only hosting --project preflight-29da3 --non-interactive --message "weather refresh ${{ github.run_id }}" || echo "deploy failed, will retry"
+            else
+              echo "snapshot failed, will retry"
+            fi
+            sleep $(( 600 - ($(date +%s) - start) > 30 ? 600 - ($(date +%s) - start) : 30 ))
+          done
           rm -f "$RUNNER_TEMP/sa.json"
+
+      - name: Start the next loop
+        if: always() && !cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run refresh-weather.yml --repo "${{ github.repository }}" --ref main

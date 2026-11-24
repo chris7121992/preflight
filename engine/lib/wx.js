@@ -182,8 +182,8 @@ async function windsFromGrid(points, levels) {
 
 async function windsAloft(points, cruiseFt) {
   const lvl = nearestLevel(cruiseFt);
-  const levels = [...new Set([lvl, 300, 500, 700, 850])];
-  const vars = levels.flatMap((l) => [`wind_speed_${l}hPa`, `wind_direction_${l}hPa`, `temperature_${l}hPa`, `geopotential_height_${l}hPa`]);
+  const levels = [...new Set([lvl, 150, 200, 250, 300, 500, 700, 850])];
+  const vars = levels.flatMap((l) => [`wind_speed_${l}hPa`, `wind_direction_${l}hPa`, `temperature_${l}hPa`]).concat([850, 700, 500].map((l) => `relative_humidity_${l}hPa`));
   const url = `https://api.open-meteo.com/v1/gfs?latitude=${points.map((p) => p.lat.toFixed(2)).join(',')}&longitude=${points.map((p) => p.lon.toFixed(2)).join(',')}&hourly=${vars.join(',')},freezing_level_height&wind_speed_unit=kn&forecast_days=3&timezone=GMT`;
   try {
     const raw = await get(url, { ttlMs: 900e3 });
@@ -198,6 +198,17 @@ async function windsAloft(points, cruiseFt) {
     const lvlG = nearest(lvl);
     return { level: lvlG, levels, data: grid, source: `GFS 5° grid from the refresh job (live request failed: ${e.message})` };
   }
+}
+
+// NWP point guidance (HRRR, NBM, GFS, ECMWF IFS) decoded from the models' GRIB2 output by Open-Meteo.
+const NWP_MODELS = ['ncep_hrrr_conus', 'ncep_nbm_conus', 'gfs_seamless', 'ecmwf_ifs025'];
+const NWP_VARS = ['temperature_2m', 'dew_point_2m', 'visibility', 'cloud_cover_low', 'precipitation', 'weather_code', 'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m', 'cape', 'lifted_index', 'freezing_level_height'];
+async function nwpPoints(points) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${points.map((p) => p.lat.toFixed(3)).join(',')}&longitude=${points.map((p) => p.lon.toFixed(3)).join(',')}&hourly=${NWP_VARS.join(',')}&models=${NWP_MODELS.join(',')}&wind_speed_unit=kn&forecast_days=3&timezone=GMT`;
+  const raw = await get(url, { ttlMs: 900e3 });
+  const arr = Array.isArray(raw) ? raw : [raw];
+  if (arr[0] && arr[0].error) throw new Error(arr[0].reason || 'Open-Meteo error');
+  return { models: NWP_MODELS, vars: NWP_VARS, data: arr };
 }
 
 // Optional: FAA NOTAM API (requires free credentials from api.faa.gov).
@@ -216,4 +227,6 @@ async function notams(ids) {
   return out;
 }
 
-module.exports = { configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nearestLevel, altToHpa, notams };
+async function allNavaids() { return config.snapshot ? snap('navaids.json') : null; }
+
+module.exports = { allNavaids, configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nwpPoints, NWP_MODELS, nearestLevel, altToHpa, notams };

@@ -85,3 +85,15 @@ test('Collins position relative to a low', () => {
   const line = [{ lat: 40, lon: -90 }, { lat: 40, lon: -80 }];
   assert.notStrictEqual(sideOf({ lat: 42, lon: -85 }, line), sideOf({ lat: 38, lon: -85 }, line));
 });
+
+test('route options score exposure to a convective SIGMET', () => {
+  const { exposure, hazardSet } = require('../engine/lib/routing');
+  const now = Date.now();
+  const sig = { hazard: 'CONVECTIVE', seriesId: '12E', validTimeFrom: now / 1000 - 600, validTimeTo: now / 1000 + 7200, altitudeHi1: 45000,
+    coords: [{ lat: 34, lon: -80 }, { lat: 34, lon: -78 }, { lat: 36, lon: -78 }, { lat: 36, lon: -80 }] };
+  const hz = hazardSet({ sigmets: [sig] });
+  const S = [{ lat: 35, lon: -79, t: now, alt: 41000, phase: 'cruise' }];
+  const far = [{ lat: 30, lon: -79, t: now, alt: 41000, phase: 'cruise' }];
+  assert.ok(exposure(S, hz).score > 0);
+  assert.strictEqual(exposure(far, hz).score, 0);
+});
