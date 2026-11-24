@@ -1,0 +1,1 @@
+{"id":"PAFR","icao":"PAFR","faa":"FRN","name":"BRYANT AAF","cycle":"2611","procedures":[{"name":"RNAV (GPS) RWY 18","pdf":"10626R18.PDF","rwy":"18","rows":[],"parsed":false},{"name":"RNAV (GPS) RWY 36","pdf":"10626R36.PDF","rwy":"36","rows":[],"parsed":false}],"alternateMinimums":null,"chartBase":"https://aeronav.faa.gov/d-tpp/2611/"}

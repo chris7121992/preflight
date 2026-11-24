@@ -1,0 +1,1 @@
+{"id":"KNUC","icao":"KNUC","faa":"NUC","name":"SAN CLEMENTE ISLAND NALF (FREDERICK SHERMAN FLD)","cycle":"2611","procedures":[{"name":"RNAV (GPS) RWY 24","pdf":"05126R24.PDF","rwy":"24","rows":[],"parsed":false},{"name":"TACAN RWY 24","pdf":"05126T24.PDF","rwy":"24","rows":[],"parsed":false}],"alternateMinimums":null,"chartBase":"https://aeronav.faa.gov/d-tpp/2611/"}

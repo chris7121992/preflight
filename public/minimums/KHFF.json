@@ -1,0 +1,1 @@
+{"id":"KHFF","icao":"KHFF","faa":"HFF","name":"MACKALL AAF","cycle":"2611","procedures":[{"name":"RNAV (GPS) RWY 12","pdf":"06315R12.PDF","rwy":"12","rows":[],"parsed":false},{"name":"RNAV (GPS) RWY 30","pdf":"06315R30.PDF","rwy":"30","rows":[],"parsed":false}],"alternateMinimums":null,"chartBase":"https://aeronav.faa.gov/d-tpp/2611/"}

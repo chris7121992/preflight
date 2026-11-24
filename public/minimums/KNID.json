@@ -1,0 +1,1 @@
+{"id":"KNID","icao":"KNID","faa":"NID","name":"CHINA LAKE NAWS (ARMITAGE FLD)","cycle":"2611","procedures":[{"name":"RNAV (GPS) RWY 03","pdf":"00914R3.PDF","rwy":"03","rows":[],"parsed":false},{"name":"TACAN Y RWY 03","pdf":"00914TY3.PDF","rwy":"03","rows":[],"parsed":false}],"alternateMinimums":null,"chartBase":"https://aeronav.faa.gov/d-tpp/2611/"}
