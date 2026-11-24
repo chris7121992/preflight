@@ -110,3 +110,12 @@ Minimums pages) for airports with a hard runway of 4,000 ft or more and writes `
 `Approach minimums` workflow rebuilds them when a new 28-day chart cycle starts. The engine uses them for the
 135.223(b) test at the destination and the OpSpec C055 alternate minimums; figures entered in the form override
 them. Values are parsed from chart PDFs, so always confirm against the current chart.
+
+## NOTAM closure guide
+
+Drop a ForeFlight briefing PDF (or paste NOTAM text) into the form. The PDF is read in the browser with pdf.js
+and never uploaded. `engine/lib/notam.js` picks out runway, taxiway and apron closures; closed runways and
+out-of-service approach aids are removed from the runway, crosswind and approach-minimums checks.
+`public/notam.js` draws them on a diagram from `public/layout/<ID>.json` (runway and taxiway shapes from
+OpenStreetMap, built by the `Airport layouts` workflow), falling back to a live OpenStreetMap query and then to
+a runway-only sketch. Layout data © OpenStreetMap contributors (ODbL).

@@ -203,3 +203,5 @@ h2.sub { margin-top: 18px; }
 .legend-row .sw.dot { background: repeating-linear-gradient(90deg, #d92d20 0 3px, transparent 3px 8px); }
 @media print { .admap { height: 320px; } }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --twy: #6f7d8f; --rwy: #c9d3e0; } .adlabel.rwyno { color: #0e1726; } .adlabel.rwyno.bad { color: #fff; } }
+.adlabel.xmark.dark { color: #d92d20; font-size: 17px; text-shadow: 0 0 2px #fff, 0 0 3px #fff; }
+.admap { height: 520px; }

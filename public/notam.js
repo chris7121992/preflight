@@ -56,7 +56,7 @@
     return true;
   }
   let layoutIndex = null;
-  async function loadGeometry(airports) {
+  async function loadGeometry(airports, onStep) {
     let need = airports.filter((a) => a.lat != null && !cached(a.id));
     if (!need.length) return;
     // 1. layouts stored with the site (built from OpenStreetMap by scripts/layouts.js)
@@ -71,6 +71,7 @@
       } catch (e) { /* fall through to the live query */ }
     }));
     need = need.filter((a) => !cached(a.id));
+    if (onStep) onStep(need);
     if (!need.length) return;
     // 2. anything else straight from OpenStreetMap
     const q = `[out:json][timeout:25];(${need.map((a) => `way["aeroway"~"^(runway|taxiway|taxilane|apron)$"](around:3800,${a.lat},${a.lon});`).join('')});out tags geom;`;
@@ -197,30 +198,32 @@
     const tip = (its) => its.map((it) => `<b>${esc(it.n.number || '')}</b> ${esc(it.n.text)}<br><span class="hint">${esc(when(it.n))}</span>`).join('<hr>');
     const bounds = [];
     for (const e of els.filter((x) => x.tags.aeroway === 'apron')) L.polygon(e.geometry.map((g) => [g.lat, g.lon]), { className: 'ad-apron', weight: 1, interactive: false }).addTo(map);
-    // Taxiways
     const twys = els.filter((x) => /taxiway|taxilane/.test(x.tags.aeroway));
+    const overlays = [];
+    // Closed sections between two limits, and closures at an intersection
+    for (const it of shown.filter((x) => x.kind === 'TWY' && x.status === 'restricted')) {
+      if (it.between) {
+        const seg = between(els, it.name, it.between);
+        if (seg) { overlays.push(() => L.polyline(seg, { color: COLORS.closed, weight: 7, lineCap: 'butt' }).addTo(map).bindPopup(tip([it]), { maxWidth: 340 })); it.placed = true; }
+      } else if (it.at) {
+        const mine = twys.filter((e) => ref(e) === it.name), other = els.filter((e) => (it.at.kind === 'RWY' ? e.tags.aeroway === 'runway' && sameRwy(ref(e), it.at.name) : ref(e) === it.at.name && /taxi/.test(e.tags.aeroway)));
+        let best = null;
+        for (const m of mine) for (const g of m.geometry) for (const o of other) for (const h of o.geometry) { const d = dist(g, h); if (!best || d < best.d) best = { d, g }; }
+        if (best && best.d < 80) { overlays.push(() => L.marker([best.g.lat, best.g.lon], { icon: label('✕', 'xmark dark') }).addTo(map).bindPopup(tip([it]), { maxWidth: 340 })); it.placed = true; }
+      }
+    }
+    // Taxiways (a partly closed one is dotted only when its closed section could not be placed)
     const labelled = new Map();
     for (const e of twys) {
       const name = ref(e), its = shown.filter((it) => it.kind !== 'RWY' && it.name === name);
-      const whole = its.filter((it) => it.status === 'closed'), part = its.filter((it) => it.status !== 'closed');
+      const whole = its.filter((it) => it.status === 'closed'), part = its.filter((it) => it.status !== 'closed' && !it.placed);
       const ll = e.geometry.map((g) => [g.lat, g.lon]);
       const style = whole.length ? { color: COLORS.closed, weight: 5 } : part.length ? { color: part.some((p) => p.status === 'affected') && !part.some((p) => p.status === 'restricted') ? COLORS.affected : COLORS.closed, weight: 4, dashArray: '2 7', opacity: 0.9 } : { className: 'ad-twy', weight: e.tags.aeroway === 'taxilane' ? 1.5 : 3 };
       const line = L.polyline(ll, style).addTo(map);
       if (its.length) line.bindPopup(tip(its), { maxWidth: 340 });
       if (name) { const len = e.geometry.length; const cur = labelled.get(name); if (!cur || len > cur.len) labelled.set(name, { len, at: mid(e.geometry), hit: its.length ? (whole.length ? 'closed' : 'part') : '' }); }
     }
-    // Closed sections between two limits, and closures at an intersection
-    for (const it of shown.filter((x) => x.kind === 'TWY' && x.status === 'restricted')) {
-      if (it.between) {
-        const seg = between(els, it.name, it.between);
-        if (seg) { L.polyline(seg, { color: COLORS.closed, weight: 7, lineCap: 'butt' }).addTo(map).bindPopup(tip([it]), { maxWidth: 340 }); it.placed = true; }
-      } else if (it.at) {
-        const mine = twys.filter((e) => ref(e) === it.name), other = els.filter((e) => (it.at.kind === 'RWY' ? e.tags.aeroway === 'runway' && sameRwy(ref(e), it.at.name) : ref(e) === it.at.name && /taxi/.test(e.tags.aeroway)));
-        let best = null;
-        for (const m of mine) for (const g of m.geometry) for (const o of other) for (const h of o.geometry) { const d = dist(g, h); if (!best || d < best.d) best = { d, g }; }
-        if (best && best.d < 80) { L.marker([best.g.lat, best.g.lon], { icon: label('✕', 'xmark') }).addTo(map).bindPopup(tip([it]), { maxWidth: 340 }); it.placed = true; }
-      }
-    }
+    overlays.forEach((f) => f());
     // Runways
     for (const e of els.filter((x) => x.tags.aeroway === 'runway')) {
       const its = shown.filter((it) => it.kind === 'RWY' && sameRwy(it.name, ref(e)));
@@ -287,7 +290,8 @@
     const pending = withNotams.some((a) => a.lat != null && !cached(a.id));
     el.querySelectorAll('.adbox').forEach((bx) => { if (pending) bx.dataset.loading = '1'; });
     draw();
-    if (pending) loadGeometry(withNotams).finally(() => { if (!el.isConnected) return; el.querySelectorAll('.adbox').forEach((bx) => delete bx.dataset.loading); draw(); });
+    const setLoading = (left) => el.querySelectorAll('.adbox').forEach((bx) => { const a = n.airports[+bx.dataset.i]; if (left.some((x) => x.id === a.id)) bx.dataset.loading = '1'; else delete bx.dataset.loading; });
+    if (pending) loadGeometry(withNotams, (left) => { if (el.isConnected) { setLoading(left); draw(); } }).finally(() => { if (!el.isConnected) return; el.querySelectorAll('.adbox').forEach((bx) => delete bx.dataset.loading); draw(); });
   }
 
   window.NotamGuide = { readPdf, render };
