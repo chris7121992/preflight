@@ -227,6 +227,28 @@ async function notams(ids) {
   return out;
 }
 
+// Published approach minimums for one airport (static files built each FAA chart cycle by scripts/minimums.js).
+async function minimums(ids) {
+  const base = config.minimums || (config.snapshot ? config.snapshot.replace(/\/data\/?$/, '/minimums') : null);
+  if (!base) return null;
+  for (const id of [...new Set(ids.filter(Boolean))]) {
+    if (!/^[A-Z0-9]{3,4}$/.test(id)) continue;
+    const key = `mins:${id}`;
+    if (cache.has(key)) { const v = cache.get(key); if (v) return v; continue; }
+    let rec = null;
+    try {
+      if (typeof base === 'function') rec = await base(id);
+      else {
+        const r = await fetch(`${base}/${id}.json`);
+        if (r.ok && /json/.test(r.headers.get('content-type') || '')) rec = await r.json();
+      }
+    } catch (e) { rec = null; }
+    cache.set(key, rec);
+    if (rec) return rec;
+  }
+  return null;
+}
+
 async function allNavaids() { return config.snapshot ? snap('navaids.json') : null; }
 
-module.exports = { allNavaids, configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nwpPoints, NWP_MODELS, nearestLevel, altToHpa, notams };
+module.exports = { minimums, allNavaids, configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nwpPoints, NWP_MODELS, nearestLevel, altToHpa, notams };

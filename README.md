@@ -102,3 +102,11 @@ public/                             web UI served by Firebase Hosting (Leaflet m
 samples/           sample ForeFlight .fpl
 test/              unit tests
 ```
+
+## Approach minimums
+
+`scripts/minimums.js` reads the landing minimums block of every FAA d-TPP approach chart (and the FAA Alternate
+Minimums pages) for airports with a hard runway of 4,000 ft or more and writes `public/minimums/<ID>.json`. The
+`Approach minimums` workflow rebuilds them when a new 28-day chart cycle starts. The engine uses them for the
+135.223(b) test at the destination and the OpSpec C055 alternate minimums; figures entered in the form override
+them. Values are parsed from chart PDFs, so always confirm against the current chart.

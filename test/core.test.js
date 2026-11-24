@@ -97,3 +97,30 @@ test('route options score exposure to a convective SIGMET', () => {
   assert.ok(exposure(S, hz).score > 0);
   assert.strictEqual(exposure(far, hz).score, 0);
 });
+
+test('approach minimums: 135.223(b) and C055 from chart data', () => {
+  const m = require('../engine/lib/minimums');
+  const row = (label, alt, hat, vis, circling = false) => ({ label, circling, cats: { C: { alt, hat, vis } } });
+  const rec = { cycle: '2611', alternateMinimums: 'X (XXX) ILS Rwy 9 Cat C 900-2½', procedures: [
+    { name: 'ILS OR LOC RWY 09', pdf: 'a.PDF', rwy: '09', rows: [row('S-ILS 9', 220, 200, 0.5), row('S-LOC 9', 500, 480, 1), row('CIRCLING', 700, 680, 2, true)] },
+    { name: 'ILS OR LOC RWY 27', pdf: 'b.PDF', rwy: '27', rows: [row('S-ILS 27', 270, 250, 0.75)] },
+    { name: 'VOR RWY 18', pdf: 'c.PDF', rwy: '18', rows: [row('S-18', 520, 500, 1)] },
+    { name: 'RNAV (GPS) RWY 36', pdf: 'd.PDF', rwy: '36', rows: [row('LPV DA', 220, 200, 0.5), row('LNAV MDA', 420, 400, 1)] },
+  ] };
+  const d = m.destinationTest(rec, { cat: 'C', runway: '27' });
+  assert.strictEqual(d.ceilNeed, 2180);
+  assert.strictEqual(d.visNeed, 3);
+  assert.strictEqual(d.approach.rwy, '27');
+  // 09 and 27 are the same pavement, so the second facility is the VOR to 18
+  const a = m.alternateMinimums({ ...rec, alternateMinimums: null }, { cat: 'C' });
+  assert.strictEqual(a.facilities, 2);
+  assert.strictEqual(a.ceil, 700);
+  assert.strictEqual(a.vis, 1.5);
+  const one = m.alternateMinimums({ ...rec, alternateMinimums: null }, { cat: 'C', facilities: 1 });
+  assert.deepStrictEqual([one.ceil, one.vis], [600, 1.5]);
+  const raised = m.alternateMinimums(rec, { cat: 'C', applyPublished: true });
+  assert.deepStrictEqual([raised.ceil, raised.vis], [900, 2.5]);
+  const gpsOnly = { cycle: '2611', procedures: [rec.procedures[3]] };
+  assert.ok(m.alternateMinimums(gpsOnly, { cat: 'C' }).none);
+  assert.strictEqual(m.alternateMinimums(gpsOnly, { cat: 'C', gps: true }).ceil, 800);
+});

@@ -119,7 +119,7 @@
       body: b.stations.map((s) => {
         const j = s.judged || {};
         const rw = s.runway && !s.runway.none ? `${s.runway.id} ${s.runway.head >= 0 ? 'hw' : 'tw'} ${Math.abs(s.runway.head)} xw ${s.runway.crossG} kt` : '-';
-        const altRule = s.altTest ? `${s.altTest.rule}: ${s.alternateRequired ? 'alternate REQUIRED' : 'no alternate needed'} (>= ${s.altTest.ceilNeed} ft & ${s.altTest.visNeed} SM)` : s.altMins ? `${s.altMins.rule}: ${s.altMins.ok ? 'meets' : 'BELOW'} ${s.altMins.ceil}-${s.altMins.vis}` : '-';
+        const altRule = s.altTest ? `${s.altTest.rule}: ${s.alternateRequired ? 'alternate REQUIRED' : 'no alternate needed'} (>= ${s.altTest.ceilNeed} ft & ${s.altTest.visNeed} SM${s.altTest.auto ? ', FAA charts Cat ' + s.altTest.cat : s.altTest.estimate ? ', estimate' : ''})` : s.altMins ? `${s.altMins.rule}: ${s.altMins.none ? 'no usable approach' : `${s.altMins.ok ? 'meets' : 'BELOW'} ${s.altMins.ceil}-${s.altMins.vis}${s.altMins.auto ? ' (FAA charts Cat ' + s.altMins.cat + ')' : s.altMins.estimate ? ' (estimate)' : ''}`}` : '-';
         const ms = mByStation[s.id];
         return [`${s.id}\n${s.role}`, `${z(s.window[0])}-${z(s.window[1])}`, s.metar ? `${s.metar.category} ${s.metar.wind.dir != null ? String(s.metar.wind.dir).padStart(3, '0') : 'VRB'}/${s.metar.wind.spd}${s.metar.wind.gst ? 'G' + s.metar.wind.gst : ''} ${s.metar.temp}/${s.metar.dewp}` : 'none', j.category ? `${j.category} ${j.ceiling != null ? j.ceiling + ' ft' : 'no ceiling'} / ${j.vis ?? '-'} SM (${s.judgedFrom})` : '-', rw, altRule, ms && ms.models && ms.models.length ? `${ms.consensus}${ms.spread >= 2 ? ' (low agreement)' : ''}` : '-'].map(t);
       }),

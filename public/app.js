@@ -46,6 +46,9 @@ $('pdfBtn').addEventListener('click', async () => {
   try { await window.BriefPDF.download(lastBrief); } catch (e) { status('Could not make the PDF: ' + e.message, true); } finally { btn.disabled = false; }
 });
 
+// Where an alternate-rule figure came from: FAA chart (with a link), the pilot's entry, or an estimate
+const srcTag = (x) => (x.auto ? ` <span class="chip">Cat ${esc(x.cat)}, ${esc(x.source)}</span>${x.chart ? ` <a href="${esc(x.chart)}" target="_blank" rel="noopener">chart</a>` : ''}` : x.manual ? ' <span class="chip">your figures</span>' : x.estimate ? ' <span class="chip">estimate</span>' : '');
+
 // Show how old the weather snapshot is
 async function freshness() {
   const cfg = window.PREFLIGHT_CONFIG || {};
@@ -74,7 +77,7 @@ $('planForm').addEventListener('submit', async (e) => {
     alternate: $('alternate').value.trim(), cruiseAlt: $('cruiseAlt').value, tas: $('tas').value,
     etd: etdLocal ? new Date(etdLocal).toISOString() : null, rules: $('rules').value,
     destCircHaa: $('destCircHaa').value, destCircNa: $('destCircNa').checked, destHat: $('destHat').value, destVisMin: $('destVisMin').value,
-    altNavFacilities: $('altNavFacilities').value, altHat: $('altHat').value, altVisMin: $('altVisMin').value, highMinsPic: $('highMinsPic').checked,
+    altNavFacilities: $('altNavFacilities').value, altHat: $('altHat').value, altVisMin: $('altVisMin').value, highMinsPic: $('highMinsPic').checked, approachCat: $('approachCat').value, altGps: $('altGps').checked,
     maxXwind: $('maxXwind').value, maxTailwind: $('maxTailwind').value, minCeiling: $('minCeiling').value, minVis: $('minVis').value, minRunway: $('minRunway').value,
   };
   $('go').disabled = true;
@@ -196,8 +199,8 @@ function renderTerminals(b) {
       ${s.metar ? `<div class="raw"><span class="pill ${s.metar.category}">${s.metar.category}</span>${esc(s.metar.raw)}</div>` : '<div class="raw">No METAR</div>'}
       ${s.taf ? `<div class="raw">${esc(s.taf)}</div>` : '<div class="raw">No TAF</div>'}
       ${j ? `<div>Planning conditions: ceiling <b>${j.ceiling ?? 'none'}</b> ft, visibility <b>${j.vis ?? '—'}</b> SM, <span class="pill ${j.category}">${j.category}</span>${s.forecast && s.forecast.worst && s.forecast.worst.category !== j.category ? ` worst TEMPO/PROB <span class="pill ${s.forecast.worst.category}">${s.forecast.worst.category}</span>` : ''}</div>` : ''}
-      ${s.altTest ? `<div class="rule"><span class="pill ${s.alternateRequired ? 'caution' : 'ok'}">${s.alternateRequired ? 'Alt req' : 'No alt'}</span><span><b>${esc(s.altTest.rule)}</b>: needs ≥ ${s.altTest.ceilNeed.toLocaleString()} ft and ${s.altTest.visNeed} SM from ETA−1 h to ETA+1 h (${esc(s.altTest.basis)}). Forecast ${s.altTest.prevailing.ceiling != null ? s.altTest.prevailing.ceiling + ' ft' : 'no ceiling'} / ${s.altTest.prevailing.vis ?? '—'} SM${s.altTest.worst && !s.altTest.worst.ok ? `, TEMPO/PROB ${s.altTest.worst.ceiling ?? 'no ceiling'} / ${s.altTest.worst.vis ?? '—'} SM` : ''}.</span></div>` : ''}
-      ${s.altMins ? `<div class="rule"><span class="pill ${s.altMins.ok ? 'ok' : 'nogo'}">${s.altMins.ok ? 'Legal alt' : 'Below'}</span><span><b>${esc(s.altMins.rule)}</b>: alternate minimums ${s.altMins.ceil} ft / ${s.altMins.vis} SM (${esc(s.altMins.basis)}).</span></div>` : ''}
+      ${s.altTest ? `<div class="rule"><span class="pill ${s.alternateRequired ? 'caution' : 'ok'}">${s.alternateRequired ? 'Alt req' : 'No alt'}</span><span><b>${esc(s.altTest.rule)}</b>: needs ≥ ${s.altTest.ceilNeed.toLocaleString()} ft and ${s.altTest.visNeed} SM from ETA−1 h to ETA+1 h (${esc(s.altTest.basis)}). Forecast ${s.altTest.prevailing.ceiling != null ? s.altTest.prevailing.ceiling + ' ft' : 'no ceiling'} / ${s.altTest.prevailing.vis ?? '—'} SM${s.altTest.worst && !s.altTest.worst.ok ? `, TEMPO/PROB ${s.altTest.worst.ceiling ?? 'no ceiling'} / ${s.altTest.worst.vis ?? '—'} SM` : ''}.${srcTag(s.altTest)}</span></div>` : ''}
+      ${s.altMins ? `<div class="rule"><span class="pill ${s.altMins.ok ? 'ok' : 'nogo'}">${s.altMins.ok ? 'Legal alt' : 'Below'}</span><span><b>${esc(s.altMins.rule)}</b>: ${s.altMins.none ? esc(s.altMins.basis) : `alternate minimums ${s.altMins.ceil} ft / ${s.altMins.vis} SM (${esc(s.altMins.basis)}).`}${srcTag(s.altMins)}${s.altMins.published ? `<br><span class="hint">FAA alternate minimums entry: ${esc(s.altMins.published)}</span>` : ''}</span></div>` : ''}
       ${rw && !rw.none ? `<div>Wind used ${windStr(s.windUsed)} → best runway <b>${esc(rw.id)}</b> (${rw.len} ft): <span class="${rw.head < 0 ? 'head' : ''}">${rw.head >= 0 ? 'head' : 'tail'} ${Math.abs(rw.head)} kt</span>, crosswind ${rw.cross}${rw.crossG !== rw.cross ? ` (gust ${rw.crossG})` : ''} kt</div>` : ''}
       ${s.tafPeriods && s.tafPeriods.length ? `<div class="table-wrap"><table><tr><th>Group</th><th>Valid</th><th>Wind</th><th>Vis</th><th>Ceiling</th><th>Wx</th></tr>${s.tafPeriods.map((p) => `<tr><td>${esc(p.change)}${p.probability ? ' ' + p.probability : ''}</td><td>${z(p.from)}–${z(p.to)}</td><td>${windStr(p.wind)}</td><td>${p.vis ?? '—'}</td><td>${p.ceiling ?? '—'}</td><td>${esc(p.wx)}</td></tr>`).join('')}</table></div>` : ''}
     </div>`;

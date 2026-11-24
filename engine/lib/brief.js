@@ -9,6 +9,7 @@ const { CE56X } = require('./aircraft');
 const collins = require('./collins');
 const nwp = require('./nwp');
 const routing = require('./routing');
+const minimums = require('./minimums');
 
 const fmtZ = (ms) => {
   const d = new Date(ms);
@@ -154,6 +155,8 @@ function bestRunway(airport, wind, opts) {
 }
 
 // ---------------------------------------------------------------- main
+const num = (v) => (v === '' || v == null || !isFinite(Number(v)) ? null : Number(v));
+
 async function buildBriefing(plan, input) {
   const errors = [];
   const opts = {
@@ -169,13 +172,15 @@ async function buildBriefing(plan, input) {
     alternate: (input.alternate || '').toUpperCase().trim() || null,
     // Approach figures for the 135.223 / alternate-minimums tests. Defaults are generic Category C estimates;
     // the pilot should enter the values from the charts for the procedures actually planned.
-    destCircHaa: input.destCircHaa === '' || input.destCircHaa == null ? 600 : Number(input.destCircHaa),
+    destCircHaa: num(input.destCircHaa),
     destCircNa: !!input.destCircNa,
-    destHat: Number(input.destHat) || 200,
-    destVisMin: Number(input.destVisMin) || 0.5,
-    altNavFacilities: input.altNavFacilities === '2' ? 2 : input.altNavFacilities === 'std' ? 'std' : 1,
-    altHat: Number(input.altHat) || 200,
-    altVisMin: Number(input.altVisMin) || 0.5,
+    destHat: num(input.destHat),
+    destVisMin: num(input.destVisMin),
+    altNavFacilities: input.altNavFacilities === '2' ? 2 : input.altNavFacilities === '1' ? 1 : input.altNavFacilities === 'std' ? 'std' : 'auto',
+    altHat: num(input.altHat),
+    altVisMin: num(input.altVisMin),
+    approachCat: ['A', 'B', 'C', 'D'].includes(input.approachCat) ? input.approachCat : 'C',
+    altGps: !!input.altGps,
     highMinsPic: !!input.highMinsPic,
   };
   if (opts.highMinsPic) { opts.minCeiling += 100; opts.minVis += 0.5; }
@@ -323,6 +328,14 @@ async function buildBriefing(plan, input) {
     }
   }
 
+  // Published approach minimums (FAA d-TPP) for the destination and alternate
+  const mins = {};
+  for (const id of [dest.id, opts.alternate].filter(Boolean)) {
+    const a = aptInfo[id];
+    mins[id] = await wx.safe('Approach minimums (FAA d-TPP)', () => wx.minimums([id, ...(a ? [a.icaoId, a.faaId, ...(a.aliases || [])] : [])]), errors);
+  }
+  const procTxt = (o) => `${o.proc} ${o.line}: ${o.alt} ft MSL (${o.hat} ft above), ${o.vis} SM`;
+
   // Station analysis (departure at ETD, destination & alternate at ETA)
   const stations = [];
   const analyzeStation = (id, role, tMs) => {
@@ -395,10 +408,16 @@ async function buildBriefing(plan, input) {
       // Alternate required?  Part 91: 91.169 (1-2-3).  Part 135: 135.223(b).
       const c = fc;
       let altTest;
-      if (opts.rules === '135') {
-        const ceilNeed = opts.destCircNa ? Math.max(opts.destHat + 1500, 2000) : Math.max(opts.destCircHaa + 1500, 0);
-        const visNeed = Math.max(3, opts.destVisMin + 2);
-        altTest = { rule: '135.223(b)', ceilNeed, visNeed, basis: opts.destCircNa ? `circling not authorized: 1,500 ft above the lowest published minimum (HAT ${opts.destHat} ft) or 2,000 ft above the airport, whichever is higher` : `1,500 ft above the lowest circling MDA (HAA ${opts.destCircHaa} ft)`, visBasis: `3 SM, or 2 SM more than the lowest visibility minimum (${opts.destVisMin} SM), whichever is greater` };
+      const rec = mins[id];
+      const manualDest = opts.destCircNa || opts.destCircHaa != null || opts.destHat != null || opts.destVisMin != null;
+      const auto = opts.rules === '135' && !manualDest ? minimums.destinationTest(rec, { cat: opts.approachCat, runway: rw && rw.id }) : null;
+      if (opts.rules === '135' && auto) {
+        altTest = { rule: '135.223(b)', ceilNeed: auto.ceilNeed, visNeed: auto.visNeed, basis: auto.basis, visBasis: auto.visBasis, auto: true, source: auto.source, cat: opts.approachCat, approach: auto.approach, circling: auto.circling, chart: rec.chartBase + (auto.circling || auto.approach).pdf };
+      } else if (opts.rules === '135') {
+        const circ = opts.destCircHaa != null ? opts.destCircHaa : 600, hat = opts.destHat != null ? opts.destHat : 200, vmin = opts.destVisMin != null ? opts.destVisMin : 0.5;
+        const ceilNeed = opts.destCircNa ? Math.max(hat + 1500, 2000) : circ + 1500;
+        const visNeed = Math.max(3, vmin + 2);
+        altTest = { rule: '135.223(b)', ceilNeed, visNeed, estimate: !manualDest, manual: manualDest, basis: opts.destCircNa ? `circling not authorized: 1,500 ft above the lowest published minimum (HAT ${hat} ft) or 2,000 ft above the airport, whichever is higher` : `1,500 ft above the lowest circling MDA (HAA ${circ} ft${manualDest ? ' entered' : ', a generic estimate'})`, visBasis: `3 SM, or 2 SM more than the lowest visibility minimum (${vmin} SM), whichever is greater` };
       } else altTest = { rule: '91.169(b)', ceilNeed: 2000, visNeed: 3, basis: '2,000 ft', visBasis: '3 SM' };
       const fails = (w) => w && ((w.ceiling != null && w.ceiling < altTest.ceilNeed) || (w.vis != null && w.vis < altTest.visNeed));
       altTest.prevailing = { ceiling: c.ceiling, vis: c.vis, ok: !fails(c) };
@@ -410,7 +429,9 @@ async function buildBriefing(plan, input) {
       const needTxt = `${altTest.rule} needs a ceiling of at least ${altTest.ceilNeed.toLocaleString('en-US')} ft (${altTest.basis}) and visibility of at least ${altTest.visNeed} SM (${altTest.visBasis}) from 1 hour before to 1 hour after ETA.`;
       if (station.alternateRequired && !opts.alternate) add('nogo', 'Alternate', `${id}: alternate required (${altTest.rule}) but none filed`, `${wxTxt} ${needTxt} Add an alternate${opts.rules === '135' ? ', and carry fuel to the destination, then the alternate, then 45 minutes at normal cruise (135.223(a))' : ''}.`, id);
       else if (station.alternateRequired) add('info', 'Alternate', `${id}: alternate required (${altTest.rule})`, `${wxTxt} ${needTxt} You have filed ${opts.alternate}${opts.rules === '135' ? '; fuel must cover destination, alternate and 45 minutes at normal cruise (135.223(a))' : ''}.`, id);
-      else add('ok', 'Alternate', `${id}: no alternate required (${altTest.rule})`, `${wxTxt} ${needTxt}${opts.rules === '135' && opts.destCircHaa === 600 && !opts.destCircNa ? ' The circling HAA used is a 600 ft Category C estimate; enter the chart value for an exact test.' : ''}`, id);
+      else add('ok', 'Alternate', `${id}: no alternate required (${altTest.rule})`, `${wxTxt} ${needTxt}${altTest.estimate ? ' No published minimums were found for this airport, so the circling HAA is a 600 ft estimate; enter the chart value for an exact test.' : ''}`, id);
+      if (altTest.auto) add('info', 'Alternate', `${id}: minimums read from the FAA charts (${altTest.source})`, `Category ${opts.approachCat}. Lowest circling: ${altTest.circling ? procTxt(altTest.circling) : 'none published'}. Approach used for visibility: ${procTxt(altTest.approach)}. Read automatically from the published charts; check them against the current chart and NOTAMs before relying on them.`, id);
+      else if (altTest.estimate) add('caution', 'Alternate', `${id}: approach minimums not found, using an estimate`, `No FAA chart minimums are on file for ${id}, so the 135.223(b) test uses a 600 ft circling HAA and ½ SM. Enter the chart values in the Part 135 section.`, id);
       if (fc.flags && fc.flags.freezingPrecip) add('nogo', 'Icing', `${id}: freezing precipitation forecast at ETA`, `Freezing rain/drizzle is outside the XLS+ ice protection certification (Appendix C) and contaminates the runway. Delay or divert.`, id);
       if (worst && worst.flags && worst.flags.freezingPrecip && !(fc.flags && fc.flags.freezingPrecip)) add('caution', 'Icing', `${id}: freezing precipitation possible (TEMPO/PROB)`, `Have a non-freezing alternate and fuel to reach it.`, id);
     }
@@ -424,17 +445,37 @@ async function buildBriefing(plan, input) {
       // Part 91: 91.169(c) standard 600-2 (precision) / 800-2 (non-precision).
       const fcA = fc;
       let am;
-      if (opts.rules === '135' && opts.altNavFacilities !== 'std') {
-        const add1 = opts.altNavFacilities === 2 ? [200, 0.5] : [400, 1];
-        am = { rule: 'OpSpec C055 (135.221)', ceil: opts.altHat + add1[0], vis: opts.altVisMin + add1[1], basis: opts.altNavFacilities === 2 ? `two operational navigation facilities to different suitable runways: +200 ft and +½ SM to the higher of the two approaches (HAT ${opts.altHat} ft, ${opts.altVisMin} SM entered)` : `one operational navigation facility: +400 ft to the HAT/HAA and +1 SM to the landing visibility (HAT ${opts.altHat} ft, ${opts.altVisMin} SM entered)` };
-      } else am = { rule: opts.rules === '135' ? '135.221 / 91.169(c)' : '91.169(c)', ceil: 600, vis: 2, ceilNp: 800, basis: '600-2 with a precision approach, 800-2 non-precision' };
+      const rec = mins[id];
+      const manualAlt = opts.altHat != null || opts.altVisMin != null;
+      const pub = rec ? minimums.publishedAlternate(rec.alternateMinimums, opts.approachCat) : null;
+      const auto = opts.rules === '135' && opts.altNavFacilities !== 'std' && !manualAlt ? minimums.alternateMinimums(rec, { cat: opts.approachCat, runway: rw && rw.id, gps: opts.altGps, facilities: opts.altNavFacilities === 'auto' ? null : opts.altNavFacilities }) : null;
+      if (auto && auto.none) {
+        add('nogo', 'Alternate', `${id}: no approach usable for alternate planning`, `${auto.reason} (${auto.source})`, id);
+        am = { rule: 'OpSpec C055 (135.221)', ceil: 99999, vis: 99, basis: auto.reason, none: true, source: auto.source };
+      } else if (auto) {
+        am = { rule: 'OpSpec C055 (135.221)', ceil: auto.ceil, vis: auto.vis, basis: auto.basis, auto: true, facilities: auto.facilities, source: auto.source, cat: opts.approachCat, approach: auto.approach, chart: rec.chartBase + auto.approach.pdf };
+      } else if (opts.rules === '135' && opts.altNavFacilities !== 'std') {
+        const two = opts.altNavFacilities === 2, hat = opts.altHat != null ? opts.altHat : 200, vmin = opts.altVisMin != null ? opts.altVisMin : 0.5;
+        const add1 = two ? [200, 0.5] : [400, 1];
+        const tag = manualAlt ? 'entered' : 'a generic estimate';
+        am = { rule: 'OpSpec C055 (135.221)', ceil: hat + add1[0], vis: vmin + add1[1], estimate: !manualAlt, manual: manualAlt, basis: two ? `two operational navigation facilities to different suitable runways: +200 ft and +½ SM to the higher of the two approaches (HAT ${hat} ft, ${vmin} SM ${tag})` : `one operational navigation facility: +400 ft to the HAT/HAA and +1 SM to the landing visibility (HAT ${hat} ft, ${vmin} SM ${tag})` };
+      } else {
+        am = { rule: opts.rules === '135' ? '135.221 / 91.169(c)' : '91.169(c)', ceil: 600, vis: 2, ceilNp: 800, basis: '600-2 with a precision approach, 800-2 non-precision' };
+        if (pub && pub.nonstandard) { am.ceil = Math.max(am.ceil, pub.nonstandard.ceil); am.ceilNp = Math.max(am.ceilNp, pub.nonstandard.ceil); am.vis = Math.max(am.vis, pub.nonstandard.vis); am.basis += `; raised to the FAA nonstandard alternate minimums published here for Cat ${opts.approachCat} (${pub.nonstandard.ceil}-${pub.nonstandard.vis}), which may apply to only some of the approaches`; am.source = `FAA d-TPP cycle ${rec.cycle}`; }
+      }
+      if (pub) am.published = pub.text;
+      if (pub && pub.na) add('caution', 'Alternate', `${id}: FAA alternate minimums entry contains "NA"`, `Some approaches at ${id} are not authorized for alternate use, or only under conditions. FAA entry: ${pub.text}`, id);
+      else if (pub && pub.nonstandard) add('info', 'Alternate', `${id}: FAA publishes nonstandard alternate minimums`, `${opts.rules === '135' && am.auto ? 'These replace 600-2/800-2 for operators without derived minimums; your C055 figures above are derived from the approach minimums instead. ' : ''}FAA entry: ${pub.text}`, id);
+      if (am.auto) add('info', 'Alternate', `${id}: alternate minimums derived from the FAA charts (${am.source})`, `Category ${opts.approachCat}, ${am.basis}. ${opts.altGps ? 'GPS approaches are included (LNAV or circling lines only).' : 'GPS approaches are not used; turn that on in the Part 135 section if your OpSpec allows it.'} Read automatically from the published charts; check them against the current chart, NOTAMs and your own C055.`, id);
+      else if (am.estimate) add('caution', 'Alternate', `${id}: approach minimums not found, using an estimate`, `No FAA chart minimums are on file for ${id}, so the alternate minimums assume a 200 ft / ½ SM approach. Enter the chart values in the Part 135 section.`, id);
       const okA = (w, ce) => (w.ceiling == null || w.ceiling >= ce) && (w.vis == null || w.vis >= am.vis);
       station.altMins = { ...am, forecast: { ceiling: fcA.ceiling, vis: fcA.vis }, ok: okA(fcA, am.ceil) };
       const fTxt = `Forecast at the alternate ETA: ${fcA.ceiling != null ? `ceiling ${fcA.ceiling} ft` : 'no ceiling'} / ${fcA.vis ?? '?'} SM.`;
-      if (!okA(fcA, am.ceil)) add('nogo', 'Alternate', `${id}: below alternate minimums (${am.rule})`, `${fTxt} Required ${am.ceil} ft / ${am.vis} SM (${am.basis}). It cannot be listed as an alternate; choose another.`, id);
+      if (!am.none && !okA(fcA, am.ceil)) add('nogo', 'Alternate', `${id}: below alternate minimums (${am.rule})`, `${fTxt} Required ${am.ceil} ft / ${am.vis} SM (${am.basis}). It cannot be listed as an alternate; choose another.`, id);
+      else if (am.none) { /* reported above */ }
       else if (am.ceilNp && !okA(fcA, am.ceilNp)) add('caution', 'Alternate', `${id}: meets alternate minimums only with a precision approach`, `${fTxt} Meets 600-2 but not 800-2. Verify the alternate has an operating precision approach and no "NA" alternate note.`, id);
       else add('ok', 'Alternate', `${id}: meets alternate minimums (${am.rule})`, `${fTxt} Required ${am.ceil} ft / ${am.vis} SM (${am.basis}).${opts.rules === '135' ? ' Confirm against your own OpSpec C055 and the alternate\'s approach notes.' : ''}`, id);
-      if (worst && !okA(worst, am.ceil)) add('caution', 'Alternate', `${id}: TEMPO/PROB below alternate minimums`, `Temporary conditions drop to ${worst.ceiling ?? 'none'} ft / ${worst.vis ?? '?'} SM. Many operators do not accept an alternate whose TEMPO is below minimums; check your SOPs.`, id);
+      if (!am.none && worst && !okA(worst, am.ceil)) add('caution', 'Alternate', `${id}: TEMPO/PROB below alternate minimums`, `Temporary conditions drop to ${worst.ceiling ?? 'none'} ft / ${worst.vis ?? '?'} SM. Many operators do not accept an alternate whose TEMPO is below minimums; check your SOPs.`, id);
     }
     // Weather flags common to all
     const flagsAll = Object.assign({}, cur ? cur.flags : {}, worst ? worst.flags : {});
@@ -744,6 +785,7 @@ function sourceList(errors) {
     ['En-route METARs', 'aviationweather.gov Data API'],
     ['Regional METARs', 'aviationweather.gov Data API (for Collins-method contrast, moisture and upstream checks)'],
     ['Model guidance (HRRR/NBM/GFS/ECMWF)', 'NOAA HRRR/NBM/GFS and ECMWF IFS point forecasts, decoded from GRIB2 by Open-Meteo'],
+    ['Approach minimums (FAA d-TPP)', 'FAA digital Terminal Procedures: landing minimums and Alternate Minimums pages, rebuilt each 28-day chart cycle'],
     ['NOTAMs (FAA API)', 'FAA NOTAM API (optional credentials)'],
   ].map(([name, desc]) => ({ name, desc, ok: !failed.has(name) }));
 }
