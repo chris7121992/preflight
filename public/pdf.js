@@ -1,5 +1,5 @@
 'use strict';
-// Two-page flight weather brief as a PDF (jsPDF + AutoTable, vector text and a vector surface sketch).
+// Flight weather brief as a PDF (two pages, plus a simulated radar page) (jsPDF + AutoTable, vector text and a vector surface sketch).
 (function () {
   const W = 612, H = 792, M = 26; // US Letter, points
   const C = { ink: [22, 32, 43], muted: [93, 107, 122], line: [214, 220, 228], navy: [14, 31, 56], accent: [31, 95, 191],
@@ -70,7 +70,9 @@
     };
 
     // ------------------------------------------------------------------ page 1
-    header('page 1 of 2');
+    const radar = (extra && extra.radar) || { list: [] }, sr = b.simRadar;
+    const pages = radar.list.length || (sr && sr.available) ? 3 : 2;
+    header(`page 1 of ${pages}`);
     y = 62;
     const vcol = d.verdict === 'GO' ? C.go : d.verdict === 'NO-GO' ? C.nogo : C.caution;
     const reasons = d.reasoning.slice(0, 4).map((r) => '- ' + clip(r, 330));
@@ -140,7 +142,7 @@
     footer();
 
     // ------------------------------------------------------------------ page 2
-    doc.addPage(); header('page 2 of 2'); y = 64;
+    doc.addPage(); header(`page 2 of ${pages}`); y = 64;
     section('Surface analysis');
     const narr = (b.surface && b.surface.narrative) || [];
     const diagrams = (extra && extra.diagrams) || [];
@@ -254,7 +256,48 @@
     }
     doc.setFont('helvetica', 'normal');
     footer();
+
+    // ------------------------------------------------------------------ page 3: simulated radar
+    if (pages === 3) {
+      doc.addPage(); header('page 3 of 3'); y = 64;
+      section('Simulated radar for the flight (model forecast, not observed radar)');
+      if (radar.list.length) {
+        const gap = 10, pw = (W - 2 * M - gap) / 2, ph = pw * (540 / 828);
+        radar.list.slice(0, 3).forEach((pn, i) => {
+          const x = M + (i % 2) * (pw + gap), yy = y + Math.floor(i / 2) * (ph + 16);
+          try { doc.addImage(pn.data, 'JPEG', x, yy, pw, ph); } catch (e) { /* skip panel */ }
+          doc.setDrawColor(...C.line); doc.setLineWidth(0.6); doc.rect(x, yy, pw, ph);
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(...C.ink); doc.text(t(pn.label), x, yy + ph + 9);
+        });
+        // legend and notes beside the last panel
+        const lx = M + pw + gap + 6, ly = y + ph + 16 + 8;
+        if (radar.list.length === 3) {
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...C.ink);
+          doc.text(doc.splitTextToSize(t(`HRRR simulated reflectivity from the ${z(new Date(radar.init).toISOString())} run, shown for the time the aircraft (blue dot) is at each position. Black line: filed route. HRRR covers the continental US and nearby waters; outside it the map is blank and the strip below applies. Tiles: Iowa Environmental Mesonet; base map: Esri.`), pw - 12), lx, ly);
+          doc.text(doc.splitTextToSize(t('This is a model forecast of radar echoes. Storms rarely form exactly where and when a model puts them: read it for the pattern (lines, coverage, timing) and use live radar on the day.'), pw - 12), lx, ly + 58);
+        }
+        y += Math.ceil(Math.min(3, radar.list.length) / 2) * (ph + 16) + 4;
+        if (radar.list.length !== 3) para(`HRRR simulated reflectivity from the ${z(new Date(radar.init).toISOString())} run, shown for the time the aircraft (blue dot) is at each position. A model forecast, not observed radar.`, { size: 6.8, color: C.muted });
+      } else {
+        para(radar.init ? `The HRRR simulated radar map reaches 18 hours past its latest run (to ${z(new Date(radar.init + 18 * 3600e3).toISOString())}). This flight is outside that, so the strip below, from the longer-range models, stands in for it.` : 'The HRRR simulated radar map could not be loaded, so only the route strip is shown.', { size: 7.2 });
+      }
+      if (sr && sr.available) {
+        section('On the route as you pass - estimated dBZ by model');
+        para(sr.text, { size: 7.6, bold: true, gap: 4 });
+        const col = (window.SimRadar && window.SimRadar.color) || (() => null);
+        table({
+          head: [['Along', ...sr.rows.map((r) => `${r.alongNm} nm\n${z(r.t).slice(3)}`)]],
+          body: sr.models.map((m) => [m, ...sr.rows.map((r) => { const c = r.cells[m]; return c ? `${c.dbz >= 15 ? c.dbz : '-'}${c.thunder ? ' TS' : ''}` : ''; })]),
+          styles: { fontSize: 6.4 * k, cellPadding: 2.2 * k, halign: 'center', lineColor: C.line, lineWidth: 0.4 },
+          columnStyles: { 0: { halign: 'left', fontStyle: 'bold', cellWidth: 44 } },
+          didParseCell: (h) => { if (h.section !== 'body' || h.column.index === 0) return; const c = col(parseInt(h.cell.raw, 10)); if (c) { h.cell.styles.fillColor = c; h.cell.styles.fontStyle = 'bold'; h.cell.styles.textColor = parseInt(h.cell.raw, 10) >= 45 ? [255, 255, 255] : [17, 17, 17]; } },
+        });
+        para(`Scale: 15 light, 25 light to moderate, 35 moderate, 40 heavy, 45 very heavy, 50+ extreme. A dash means no echo; TS means the model has a thunderstorm there. ${sr.method}`, { size: 6.2, color: C.muted });
+      }
+      footer();
+    }
     doc.__overflow = overflow;
+    doc.__pages = pages;
     return doc;
   }
 
@@ -397,12 +440,14 @@
   async function download(b) {
     if (!window.jspdf || !window.jspdf.jsPDF) throw new Error('PDF library did not load. Check your connection and reload.');
     let doc, diagrams = [];
+    let radar = { list: [] };
     try { if (window.NotamGuide && window.NotamGuide.diagrams) diagrams = await window.NotamGuide.diagrams(b); } catch (e) { /* brief without diagrams */ }
+    try { if (window.SimRadar) radar = await window.SimRadar.panels(b); } catch (e) { /* brief without radar maps */ }
     for (const k of [1, 0.94, 0.88, 0.82, 0.76, 0.7]) {
-      doc = build(b, k, { diagrams });
-      if (doc.getNumberOfPages() <= 2 && !doc.__overflow) break;
+      doc = build(b, k, { diagrams, radar });
+      if (doc.getNumberOfPages() <= doc.__pages && !doc.__overflow) break;
     }
-    while (doc.getNumberOfPages() > 2) doc.deletePage(doc.getNumberOfPages());
+    while (doc.getNumberOfPages() > doc.__pages) doc.deletePage(doc.getNumberOfPages());
     const day = new Date(b.plan.etd).toISOString().slice(0, 10);
     doc.save(`Brief_${b.plan.dep}-${b.plan.dest}_${day}_${z(b.plan.etd).replace('/', '')}.pdf`);
   }

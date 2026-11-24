@@ -7,6 +7,7 @@ const fronts = require('./fronts');
 const dec = require('./decode');
 const { CE56X } = require('./aircraft');
 const sfcread = require('./sfcread');
+const simradar = require('./simradar');
 const nwp = require('./nwp');
 const routing = require('./routing');
 const minimums = require('./minimums');
@@ -582,7 +583,9 @@ async function buildBriefing(plan, input) {
     const w = winOf(role, tMs);
     return { id, role, lat: a.lat, lon: a.lon, from: w[0], to: w[1] };
   }).filter(Boolean);
-  nwpRaw = nwpStations.length ? await wx.safe('Model guidance (HRRR/NBM/GFS/ECMWF)', () => wx.nwpPoints(nwpStations), errors) : null;
+  // The same request carries points along the route, for the simulated radar at the time of passage
+  const radarPts = simradar.routePoints(S, 12);
+  nwpRaw = nwpStations.length ? await wx.safe('Model guidance (HRRR/NBM/GFS/ECMWF)', () => wx.nwpPoints([...nwpStations, ...radarPts]), errors) : null;
   for (const v of visits) analyzeStation(...v);
 
   // ---- en-route hazards
@@ -746,6 +749,10 @@ async function buildBriefing(plan, input) {
   // ---- NWP model guidance (HRRR / NBM / GFS / ECMWF) at the terminals
   for (const n of nwpStations) { const st = stations.find((x) => x.id === n.id); if (st) { n.tafCategory = st.judgedFrom === 'TAF' && st.judged ? st.judged.category : null; n.tafFlags = st.forecast && st.forecast.worst ? st.forecast.worst.flags : null; } }
   const models = { available: !!nwpRaw, source: 'NOAA HRRR, NBM and GFS and ECMWF IFS, decoded from GRIB2 by Open-Meteo', stations: nwp.analyze(nwpRaw, nwpStations, add) };
+  const simRadar = nwpRaw
+    ? simradar.analyze(radarPts, nwpRaw.models, (i) => nwpRaw.data[nwpStations.length + i] && nwpRaw.data[nwpStations.length + i].hourly, add, fmtZ)
+    : { available: false, rows: [], models: [], text: 'Model data could not be loaded, so the route strip is not available.' };
+  simRadar.frames = simradar.frames(S, 15);
   const ice = nwp.icingLayers(upper);
   models.icingLayers = ice;
   if (ice.length) {
@@ -837,6 +844,7 @@ async function buildBriefing(plan, input) {
     range: rangeCheck,
     surface,
     models,
+    simRadar,
     routing: { route: routeOpts, altitude: altOpts, procedures: procs },
     charts: wx.wpc.charts(),
     notams: notamInfo,

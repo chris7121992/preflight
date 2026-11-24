@@ -210,3 +210,25 @@ test('future arrivals are judged on forecasts, never the current METAR', () => {
   assert.strictEqual(b({ hoursAhead: 0.5, hasMetar: false, tafCovers: true }), 'TAF');
   assert.strictEqual(b({ role: 'departure' }), 'METAR');
 });
+
+test('simulated radar: reflectivity from model precipitation along the route', () => {
+  const sr = require('../engine/lib/simradar');
+  assert.strictEqual(sr.dbzOf(0, false), 0);
+  assert.ok(sr.dbzOf(1, false) >= 22 && sr.dbzOf(1, false) <= 24);
+  assert.ok(sr.dbzOf(10, true) >= 38 && sr.dbzOf(25, true) >= 44);
+  const t0 = Date.UTC(2026, 10, 25, 12);
+  const samples = Array.from({ length: 31 }, (_, i) => ({ lat: 30 + i * 0.1, lon: -95, s: i * 10, t: t0 + i * 2 * 60e3, alt: 30000, phase: 'cruise' }));
+  const pts = sr.routePoints(samples, 4);
+  assert.deepStrictEqual(pts.map((p) => p.s), [0, 100, 200, 300]);
+  assert.strictEqual(sr.frames(samples).length, 5);
+  const time = ['2026-11-25T12:00', '2026-11-25T13:00', '2026-11-25T14:00'];
+  const hourly = (wet) => ({ time, precipitation_a: wet ? [0, 12, 12] : [0, 0, 0], precipitation_b: wet ? [0, 14, 14] : [0, 0, 0], weather_code_a: wet ? [3, 95, 95] : [1, 1, 1], weather_code_b: [3, 63, 63], cape_a: [0, 0, 0], cape_b: [0, 0, 0] });
+  const factors = [];
+  const out = sr.analyze(pts, ['a', 'b'], (i) => hourly(i === 2), (level, cat, title) => factors.push({ level, title }), () => '25/1240Z');
+  assert.strictEqual(out.rows[0].max, 0);
+  assert.ok(out.rows[2].cells.a.dbz >= 45 && out.rows[2].cells.a.thunder);
+  assert.ok(out.rows[2].cells.b.dbz >= 40);
+  assert.strictEqual(factors.length, 1);
+  assert.strictEqual(factors[0].level, 'caution');
+  assert.match(factors[0].title, /heavy echoes on the route at 200 nm/);
+});

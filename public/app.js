@@ -148,6 +148,7 @@ function render(b) {
   renderTerminals(b);
   renderWinds(b);
   renderHazards(b);
+  try { window.SimRadar.render(b, $('simradar')); } catch (e) { $('simradar').textContent = 'Simulated radar could not be shown: ' + e.message; }
   renderPireps(b);
   renderEnroute(b);
   renderNotams(b);

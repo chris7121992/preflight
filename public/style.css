@@ -205,3 +205,7 @@ h2.sub { margin-top: 18px; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --twy: #6f7d8f; --rwy: #c9d3e0; } .adlabel.rwyno { color: #0e1726; } .adlabel.rwyno.bad { color: #fff; } }
 .adlabel.xmark.dark { color: #d92d20; font-size: 17px; text-shadow: 0 0 2px #fff, 0 0 3px #fff; }
 .admap { height: 520px; }
+
+.simmap { height: 430px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); margin: 0 0 6px; }
+.simstrip th, .simstrip td { text-align: center; min-width: 46px; } .simstrip td:first-child { text-align: left; }
+@media print { .simmap { height: 320px; } }
