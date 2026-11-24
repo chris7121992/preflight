@@ -27,6 +27,25 @@ function setFile(f) {
   r.readAsText(f);
 }
 $('file').addEventListener('change', (e) => setFile(e.target.files[0]));
+
+// NOTAMs: a ForeFlight briefing PDF (read in the browser, never uploaded) or pasted text
+let notamFromFile = '';
+async function setNotamFile(f) {
+  if (!f) return;
+  const t = $('notamDropText');
+  t.innerHTML = `Reading <strong>${esc(f.name)}</strong>…`;
+  try {
+    const text = /\.pdf$/i.test(f.name) || f.type === 'application/pdf' ? await window.NotamGuide.readPdf(f) : await f.text();
+    const n = window.PreflightEngine.parseNotams(text);
+    notamFromFile = text;
+    t.innerHTML = n.length ? `<strong>${esc(f.name)}</strong>: ${n.length} NOTAMs found. Click to replace.` : `<strong>${esc(f.name)}</strong>: no NOTAMs found in this file. Try pasting the text instead.`;
+  } catch (e) { notamFromFile = ''; t.innerHTML = `Could not read <strong>${esc(f.name)}</strong> (${esc(e.message)}). Try pasting the NOTAM text instead.`; }
+}
+$('notamFile').addEventListener('change', (e) => setNotamFile(e.target.files[0]));
+const nDrop = $('notamDrop');
+['dragenter', 'dragover'].forEach((ev) => nDrop.addEventListener(ev, (e) => { e.preventDefault(); nDrop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((ev) => nDrop.addEventListener(ev, (e) => { e.preventDefault(); nDrop.classList.remove('over'); }));
+nDrop.addEventListener('drop', (e) => setNotamFile(e.dataTransfer.files[0]));
 const drop = $('drop');
 ['dragenter', 'dragover'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove('over'); }));
@@ -77,7 +96,7 @@ $('planForm').addEventListener('submit', async (e) => {
     alternate: $('alternate').value.trim(), cruiseAlt: $('cruiseAlt').value, tas: $('tas').value,
     etd: etdLocal ? new Date(etdLocal).toISOString() : null, rules: $('rules').value,
     destCircHaa: $('destCircHaa').value, destCircNa: $('destCircNa').checked, destHat: $('destHat').value, destVisMin: $('destVisMin').value,
-    altNavFacilities: $('altNavFacilities').value, altHat: $('altHat').value, altVisMin: $('altVisMin').value, highMinsPic: $('highMinsPic').checked, approachCat: $('approachCat').value, altGps: $('altGps').checked,
+    altNavFacilities: $('altNavFacilities').value, altHat: $('altHat').value, altVisMin: $('altVisMin').value, highMinsPic: $('highMinsPic').checked, notamText: [notamFromFile, $('notamText').value].filter(Boolean).join('\n\n'), approachCat: $('approachCat').value, altGps: $('altGps').checked,
     maxXwind: $('maxXwind').value, maxTailwind: $('maxTailwind').value, minCeiling: $('minCeiling').value, minVis: $('minVis').value, minRunway: $('minRunway').value,
   };
   $('go').disabled = true;
@@ -239,14 +258,7 @@ function renderEnroute(b) {
     : '<p>No en-route METARs within 35 nm.</p>';
 }
 
-function renderNotams(b) {
-  const n = b.notams;
-  if (!n.available) {
-    $('notams').innerHTML = `<p>${esc(n.note)}</p><p>${n.links.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.id)} NOTAMs (FAA)</a>`).join(' · ')}</p>`;
-    return;
-  }
-  $('notams').innerHTML = Object.entries(n.byAirport).map(([id, list]) => `<h3>${esc(id)} (${list.length})</h3>${list.slice(0, 30).map((x) => `<div class="raw">${esc(x.text)}</div>`).join('')}`).join('');
-}
+function renderNotams(b) { window.NotamGuide.render(b, $('notams')); }
 
 function renderSources(b) {
   $('sources').innerHTML = b.sources.map((s) => `<div class="src"><span class="${s.ok ? 'ok' : 'bad'}">${s.ok ? '✓' : '✗'}</span><span><b>${esc(s.name)}</b> · ${esc(s.desc)}</span></div>`).join('')

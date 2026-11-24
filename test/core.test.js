@@ -124,3 +124,34 @@ test('approach minimums: 135.223(b) and C055 from chart data', () => {
   assert.ok(m.alternateMinimums(gpsOnly, { cat: 'C' }).none);
   assert.strictEqual(m.alternateMinimums(gpsOnly, { cat: 'C', gps: true }).ceil, 800);
 });
+
+test('NOTAM text: closures, partial closures and times', () => {
+  const notam = require('../engine/lib/notam');
+  const text = [
+    'Departure KHOU - William P Hobby', ' RUNWAY',
+    ' HOU 09/188 HOU RWY 13L/31R CLSD 2609292023-2712312300',
+    ' HOU 11/063 HOU RWY 13R PAPI U/S 2611121331-2611252000EST',
+    ' TAXIWAY',
+    ' HOU 10/171 HOU TWY M BTN TWY K AND TWY H CLSD 2610302232-2612312359',
+    ' HOU 11/117 HOU TWY Z LOCATION MARKINGS BTN TWY D AND TWY H1 REMOVED', '                2611231811-2701312359',
+    ' HOU 09/189 HOU TWY K1 CLSD 2609292052-2612312300',
+    ' HOU 07/064 HOU NAV ILS RWY 04 U/S 2607131430-2612311800',
+    '', 'Destination MMSL - Cabo San Lucas International', ' RUNWAY WORK IN PROGRESS',
+    ' B3888/26 NOTAMR B3884/26', ' Q) MMFR/QMRHW/IV/NBO/A/000/999/2257N10956W002', ' A) MMSL', ' B) 2611031400', ' C) 2612030259',
+    ' E) RWY 11/29 WIP MEN AND EQPT WILL BE REMOVED FOR ACFT OPS', '', 'US Enroute Navigation NOTAMs',
+  ].join('\n');
+  const all = notam.parse(text);
+  assert.strictEqual(all.length, 7);
+  const by = Object.fromEntries(all.map((n) => [n.number, n]));
+  assert.deepStrictEqual(by['HOU 09/188'].items.map((i) => [i.kind, i.name, i.status]), [['RWY', '13L/31R', 'closed']]);
+  assert.strictEqual(by['HOU 11/063'].items[0].status, 'minor');
+  assert.deepStrictEqual(by['HOU 10/171'].items[0].between.map((b) => b.name), ['K', 'H']);
+  assert.strictEqual(by['HOU 10/171'].items[0].status, 'restricted');
+  assert.strictEqual(by['HOU 11/117'].end, Date.UTC(2027, 0, 31, 23, 59));
+  assert.deepStrictEqual(by['HOU 07/064'].nav, { aid: 'ILS', rwy: '4', part: 'aid' });
+  assert.strictEqual(by['B3888/26'].location, 'MMSL');
+  assert.deepStrictEqual(by['B3888/26'].items.map((i) => [i.name, i.status]), [['11/29', 'affected']]);
+  const grouped = notam.byAirport(all, [{ id: 'KHOU', ids: ['KHOU', 'HOU'] }, { id: 'MMSL', ids: ['MMSL'] }]);
+  assert.strictEqual(grouped.KHOU.length, 6);
+  assert.ok(!notam.activeIn(by['HOU 11/063'], Date.UTC(2026, 10, 26), Date.UTC(2026, 10, 26, 2)));
+});

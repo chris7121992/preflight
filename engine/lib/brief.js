@@ -10,6 +10,7 @@ const collins = require('./collins');
 const nwp = require('./nwp');
 const routing = require('./routing');
 const minimums = require('./minimums');
+const notam = require('./notam');
 
 const fmtZ = (ms) => {
   const d = new Date(ms);
@@ -182,6 +183,7 @@ async function buildBriefing(plan, input) {
     approachCat: ['A', 'B', 'C', 'D'].includes(input.approachCat) ? input.approachCat : 'C',
     altGps: !!input.altGps,
     highMinsPic: !!input.highMinsPic,
+    notamText: typeof input.notamText === 'string' ? input.notamText.slice(0, 2e6) : '',
   };
   if (opts.highMinsPic) { opts.minCeiling += 100; opts.minVis += 0.5; }
   if (!isFinite(opts.etd)) opts.etd = Date.now() + 3600e3;
@@ -328,6 +330,24 @@ async function buildBriefing(plan, input) {
     }
   }
 
+  // NOTAMs from the pilot's briefing (pasted text or a ForeFlight briefing PDF read in the browser)
+  const pastedNotams = opts.notamText.trim() ? notam.parse(opts.notamText) : null;
+  const notamsBy = pastedNotams ? notam.byAirport(pastedNotams, airports.map((id) => ({ id, ids: [id, ...(aptInfo[id] ? [aptInfo[id].icaoId, aptInfo[id].faaId, ...(aptInfo[id].aliases || [])] : [])] }))) : {};
+  // What is in force at an airport during a time window
+  const notamState = (id, t0, t1) => {
+    const act = (notamsBy[id] || []).filter((n) => notam.activeIn(n, t0, t1));
+    const items = act.flatMap((n) => n.items.map((it) => ({ ...it, notam: n })));
+    return {
+      active: act,
+      closedRwy: items.filter((it) => it.kind === 'RWY' && it.status === 'closed'),
+      otherRwy: items.filter((it) => it.kind === 'RWY' && (it.status === 'restricted' || it.status === 'affected')),
+      twy: items.filter((it) => it.kind !== 'RWY' && (it.status === 'closed' || it.status === 'restricted')),
+      navOut: act.filter((n) => n.nav && n.nav.part === 'aid' && n.nav.rwy),
+    };
+  };
+  // Approaches that NOTAMs take away: any approach to a closed runway, and ILS/LOC approaches whose aid is out
+  const approachSkip = (ns) => (o) => ns.closedRwy.some((it) => notam.sameRunway(it.name, o.rwy)) || (!o.rnav && ns.navOut.some((n) => notam.sameRunway(n.nav.rwy, o.rwy) && new RegExp(`\\b${n.nav.aid === 'GP' || n.nav.aid === 'GS' ? 'ILS' : n.nav.aid}\\b`).test(o.proc + ' ' + o.line)));
+
   // Published approach minimums (FAA d-TPP) for the destination and alternate
   const mins = {};
   for (const id of [dest.id, opts.alternate].filter(Boolean)) {
@@ -386,7 +406,17 @@ async function buildBriefing(plan, input) {
     const windSrc = taf && periods.length && !useMetar
       ? (() => { let w = null; for (const p of periods) if (!w || (p.wind.gst || p.wind.spd) > (w.gst || w.spd)) w = p.wind; return w; })()
       : cur && cur.wind;
-    const rw = bestRunway(apt, windSrc, opts);
+    const ns = notamState(id, win[0], win[1]);
+    const openApt = apt && ns.closedRwy.length ? { ...apt, runways: (apt.runways || []).filter((r) => !ns.closedRwy.some((it) => notam.sameRunway(it.name, r.id))) } : apt;
+    const rw = bestRunway(openApt, windSrc, opts);
+    if (pastedNotams) {
+      station.notams = { count: (notamsBy[id] || []).length, closedRunways: ns.closedRwy.map((it) => it.name), closedTaxiways: [...new Set(ns.twy.map((it) => it.name))] };
+      const tx = (n) => `${n.number || ''} ${n.summary}`.trim();
+      if (ns.closedRwy.length) add(apt && openApt.runways.length === 0 ? 'nogo' : 'caution', 'NOTAM', `${id}: runway ${[...new Set(ns.closedRwy.map((it) => it.name))].join(', ')} closed by NOTAM`, `${apt && openApt.runways.length === 0 ? 'Every runway in the database is closed in this window. ' : 'Closed runways are left out of the runway, crosswind and approach-minimums checks. '}${ns.closedRwy.map((it) => tx(it.notam)).join(' | ')}`, id);
+      if (ns.otherRwy.length) add('caution', 'NOTAM', `${id}: runway ${[...new Set(ns.otherRwy.map((it) => it.name))].join(', ')} restricted or work in progress`, ns.otherRwy.map((it) => tx(it.notam)).join(' | '), id);
+      if (ns.navOut.length) add('caution', 'NOTAM', `${id}: approach aid out of service`, `${ns.navOut.map((n) => tx(n)).join(' | ')}. Approaches that need these aids are left out of the automatic minimums.`, id);
+      if (ns.twy.length) add('info', 'NOTAM', `${id}: ${[...new Set(ns.twy.map((it) => it.name))].length} taxiway or apron closure(s)`, `Closed or partly closed: ${[...new Set(ns.twy.map((it) => it.name))].join(', ')}. See the closure diagram.`, id);
+    }
     station.runway = rw;
     station.windUsed = windSrc;
     if (rw && rw.none) add('nogo', 'Runway', `${id}: no runway meets ${CE56X.absoluteMinRunwayFt} ft`, `Longest hard-surface runway in the database is ${rw.longestFt} ft.`, id);
@@ -410,7 +440,7 @@ async function buildBriefing(plan, input) {
       let altTest;
       const rec = mins[id];
       const manualDest = opts.destCircNa || opts.destCircHaa != null || opts.destHat != null || opts.destVisMin != null;
-      const auto = opts.rules === '135' && !manualDest ? minimums.destinationTest(rec, { cat: opts.approachCat, runway: rw && rw.id }) : null;
+      const auto = opts.rules === '135' && !manualDest ? minimums.destinationTest(rec, { cat: opts.approachCat, runway: rw && rw.id, skip: approachSkip(ns) }) : null;
       if (opts.rules === '135' && auto) {
         altTest = { rule: '135.223(b)', ceilNeed: auto.ceilNeed, visNeed: auto.visNeed, basis: auto.basis, visBasis: auto.visBasis, auto: true, source: auto.source, cat: opts.approachCat, approach: auto.approach, circling: auto.circling, chart: rec.chartBase + (auto.circling || auto.approach).pdf };
       } else if (opts.rules === '135') {
@@ -448,7 +478,7 @@ async function buildBriefing(plan, input) {
       const rec = mins[id];
       const manualAlt = opts.altHat != null || opts.altVisMin != null;
       const pub = rec ? minimums.publishedAlternate(rec.alternateMinimums, opts.approachCat) : null;
-      const auto = opts.rules === '135' && opts.altNavFacilities !== 'std' && !manualAlt ? minimums.alternateMinimums(rec, { cat: opts.approachCat, runway: rw && rw.id, gps: opts.altGps, facilities: opts.altNavFacilities === 'auto' ? null : opts.altNavFacilities }) : null;
+      const auto = opts.rules === '135' && opts.altNavFacilities !== 'std' && !manualAlt ? minimums.alternateMinimums(rec, { cat: opts.approachCat, runway: rw && rw.id, gps: opts.altGps, facilities: opts.altNavFacilities === 'auto' ? null : opts.altNavFacilities, skip: approachSkip(ns) }) : null;
       if (auto && auto.none) {
         add('nogo', 'Alternate', `${id}: no approach usable for alternate planning`, `${auto.reason} (${auto.source})`, id);
         am = { rule: 'OpSpec C055 (135.221)', ceil: 99999, vis: 99, basis: auto.reason, none: true, source: auto.source };
@@ -676,10 +706,13 @@ async function buildBriefing(plan, input) {
   if (altOpts.best !== Math.round(opts.cruiseAlt / 1000) * 10 && !/as good as any/.test(altOpts.text)) add('info', 'Routing', `Altitude option: FL${altOpts.best}`, altOpts.text, 'routing');
 
   // NOTAMs
-  const notamInfo = notams
-    ? { available: true, byAirport: notams }
-    : { available: false, note: 'Set FAA_CLIENT_ID and FAA_CLIENT_SECRET (free at api.faa.gov) to pull NOTAMs automatically.', links: airports.map((id) => ({ id, url: `https://notams.aim.faa.gov/notamSearch/nsapp.html#/results?designators=${id}` })) };
-  if (notams) {
+  const notamAirports = airports.map((id) => { const a = aptInfo[id]; const st = stations.find((x) => x.id === id); return { id, ids: a ? [a.icaoId, a.faaId, ...(a.aliases || [])].filter(Boolean) : [], name: a ? a.name : id, lat: a ? a.lat : null, lon: a ? a.lon : null, runways: a ? a.runways : [], role: st ? st.role : 'en route', window: st ? st.window : null }; }).filter((a) => stations.some((x) => x.id === a.id));
+  const notamInfo = pastedNotams
+    ? { available: true, source: 'briefing', total: pastedNotams.length, airports: notamAirports, byAirport: Object.fromEntries(notamAirports.map((a) => [a.id, (notamsBy[a.id] || []).map((n) => ({ number: n.number, text: n.summary || n.raw, subject: n.subject, start: n.start, end: n.end, perm: n.perm, items: n.items, nav: n.nav || null, active: a.window ? notam.activeIn(n, Date.parse(a.window[0]), Date.parse(a.window[1])) : true }))])) }
+    : notams
+      ? { available: true, source: 'faa', airports: notamAirports, byAirport: Object.fromEntries(Object.entries(notams).map(([id, list]) => [id, list.map((x) => { const pn = notam.parseOne(`${id} 0/000 ${id} ${x.text}`); return { number: x.number, text: x.text, subject: pn.subject, start: Date.parse(x.start) || null, end: Date.parse(x.end) || null, items: pn.items, nav: pn.nav || null, active: true }; })])) }
+      : { available: false, airports: notamAirports, note: 'Upload your ForeFlight briefing PDF or paste NOTAM text in the form to check closures and draw the closure diagram.', links: airports.map((id) => ({ id, url: `https://notams.aim.faa.gov/notamSearch/nsapp.html#/results?designators=${id}` })) };
+  if (!pastedNotams && notams) {
     for (const [id, list] of Object.entries(notams)) {
       const closed = list.filter((n) => /\bRWY\b.*\bCLSD\b|\bAD AP CLSD\b/.test(n.text || ''));
       if (closed.length) add('caution', 'NOTAM', `${id}: ${closed.length} closure NOTAM(s)`, closed.slice(0, 4).map((n) => n.text).join(' | '), id);

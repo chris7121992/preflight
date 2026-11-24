@@ -231,8 +231,13 @@ async function notams(ids) {
 async function minimums(ids) {
   const base = config.minimums || (config.snapshot ? config.snapshot.replace(/\/data\/?$/, '/minimums') : null);
   if (!base) return null;
+  let have = null;
+  if (typeof base === 'string') {
+    if (!cache.has('mins:index')) cache.set('mins:index', fetch(`${base}/index.json`).then((r) => (r.ok ? r.json() : null)).then((j) => (j && Array.isArray(j.airports) ? new Set(j.airports) : null)).catch(() => null));
+    have = await cache.get('mins:index');
+  }
   for (const id of [...new Set(ids.filter(Boolean))]) {
-    if (!/^[A-Z0-9]{3,4}$/.test(id)) continue;
+    if (!/^[A-Z0-9]{3,4}$/.test(id) || (have && !have.has(id))) continue;
     const key = `mins:${id}`;
     if (cache.has(key)) { const v = cache.get(key); if (v) return v; continue; }
     let rec = null;

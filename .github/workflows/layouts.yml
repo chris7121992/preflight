@@ -1,0 +1,56 @@
+# Builds public/layout (runway and taxiway shapes from OpenStreetMap) for the NOTAM closure guide.
+# Airport layouts change rarely, so this runs by hand; airports already on file are skipped unless forced.
+name: Airport layouts
+
+on:
+  workflow_dispatch:
+    inputs:
+      only:
+        description: Comma-separated airport ids to build (blank for every airport with approach minimums)
+        type: string
+        default: ''
+      force:
+        description: Rebuild airports already on file
+        type: boolean
+        default: false
+
+concurrency:
+  group: airport-layouts
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+
+      - name: Build layouts from OpenStreetMap
+        env:
+          ONLY: ${{ inputs.only }}
+        run: |
+          mkdir -p public/data
+          curl -fsSL --retry 3 -o public/data/airports.json https://preflight-29da3.web.app/data/airports.json
+          if [ -n "$ONLY" ]; then set -- --only "$ONLY"; else set --; fi
+          node scripts/layouts.js "$@" ${{ inputs.force && '--force' || '' }}
+
+      - name: Commit and redeploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A public/layout
+          if git diff --cached --quiet; then echo "no change"; exit 0; fi
+          git commit -q -m "Airport layouts from OpenStreetMap"
+          git pull -q --rebase origin main
+          git push origin HEAD:main
+          gh workflow run refresh-weather.yml --repo "${{ github.repository }}" --ref main

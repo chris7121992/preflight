@@ -6,7 +6,8 @@ const normRwy = (r) => String(r || '').toUpperCase().replace(/^0+/, '');
 const isRnav = (p) => /RNAV|GPS|RNP/.test(p.name);
 const sane = (x) => x && !x.na && x.hat != null && x.hat >= 100 && x.hat <= 4000 && x.vis >= 0.25 && x.vis <= 5;
 
-function options(rec, cat) {
+// `skip(option)` drops approaches that NOTAMs make unusable (closed runway, approach aid out of service).
+function options(rec, cat, skip = null) {
   const straight = [], circling = [];
   let circlingNaCount = 0;
   for (const p of rec.procedures || []) {
@@ -16,6 +17,7 @@ function options(rec, cat) {
       if (r.circling && x.na) { circlingNaCount++; continue; }
       if (!sane(x)) continue;
       const o = { proc: p.name, pdf: p.pdf, rwy: normRwy(p.rwy), line: r.label, alt: x.alt, hat: x.hat, vis: x.vis, rnav: isRnav(p), vertical: /LPV|VNAV|S-ILS|GLS|RNP/.test(r.label) };
+      if (skip && skip(o)) continue;
       (r.circling ? circling : straight).push(o);
     }
   }
@@ -25,9 +27,9 @@ function options(rec, cat) {
 }
 
 // 135.223(b): what the destination forecast must meet for no alternate to be required.
-function destinationTest(rec, { cat = 'C', runway = null } = {}) {
+function destinationTest(rec, { cat = 'C', runway = null, skip = null } = {}) {
   if (!rec) return null;
-  const { straight, circling } = options(rec, cat);
+  const { straight, circling } = options(rec, cat, skip);
   if (!straight.length && !circling.length) return null;
   const rw = runway ? String(runway).split('/').map(normRwy) : [];
   const forRwy = straight.filter((o) => rw.includes(o.rwy));
@@ -66,9 +68,9 @@ function publishedAlternate(text, cat) {
 }
 
 // Alternate weather minimums under OpSpec C055 (Part 135) from the published approaches.
-function alternateMinimums(rec, { cat = 'C', runway = null, gps = false, facilities = null, applyPublished = false } = {}) {
+function alternateMinimums(rec, { cat = 'C', runway = null, gps = false, facilities = null, applyPublished = false, skip = null } = {}) {
   if (!rec) return null;
-  const { straight, circling } = options(rec, cat);
+  const { straight, circling } = options(rec, cat, skip);
   // Without WAAS approval for alternate planning, base it on non-GPS approaches. With it, LNAV or circling only.
   const elig = (o) => (!o.rnav ? true : gps && !o.vertical);
   const s = straight.filter(elig), c = circling.filter(elig);

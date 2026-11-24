@@ -180,3 +180,26 @@ td.num { font-variant-numeric: tabular-nums; }
   .appbar-actions, form, .tabs, .charts, #mapCard { display: none !important; }
   body { background: #fff; } .card { break-inside: avoid; box-shadow: none; }
 }
+
+/* NOTAM closure guide */
+:root { --twy: #9aa6b4; --rwy: #2b3648; }
+h2.sub { margin-top: 18px; }
+.drop.small { padding: 14px; min-height: 0; }
+#notamPaste { margin-top: 8px; } #notamPaste summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+#notamText { width: 100%; margin-top: 6px; font: 12px/1.5 var(--mono); border: 1px solid var(--line); border-radius: 8px; padding: 8px; background: var(--card); color: var(--ink); resize: vertical; }
+.adbox { border-top: 1px solid var(--line); padding-top: 14px; margin-top: 14px; }
+.adbox h3 { margin: 0 0 6px; } .adbox h3 .muted { color: var(--muted); font-weight: 500; font-size: 13px; }
+.admap { height: 440px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); margin: 8px 0 4px; }
+.admap.leaflet-container { background: var(--soft); font-family: var(--sans); }
+.ad-twy { stroke: var(--twy); } .ad-rwy { stroke: var(--rwy); } .ad-apron { stroke: var(--line); fill: var(--muted); fill-opacity: .12; }
+.adlabel { font: 600 11px/1 var(--sans); white-space: nowrap; transform: translate(-50%, -50%); width: auto !important; height: auto !important; }
+.adlabel.twyno { background: var(--card); color: var(--ink); border: 1px solid var(--line); border-radius: 4px; padding: 2px 4px; }
+.adlabel.twyno.bad { background: #d92d20; color: #fff; border-color: #d92d20; } .adlabel.twyno.warn { border-color: #d92d20; color: #d92d20; }
+.adlabel.rwyno { background: var(--rwy); color: #fff; border-radius: 4px; padding: 3px 5px; font-size: 12px; } .adlabel.rwyno.bad { background: #d92d20; }
+.adlabel.xmark { color: #fff; font-size: 15px; font-weight: 800; text-shadow: 0 0 2px #7a0f08, 0 0 2px #7a0f08; }
+.adlist td { vertical-align: top; font-size: 13px; } .adlist tr.off { opacity: .5; }
+.legend-row { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.legend-row .sw { display: inline-block; width: 22px; height: 5px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+.legend-row .sw.dot { background: repeating-linear-gradient(90deg, #d92d20 0 3px, transparent 3px 8px); }
+@media print { .admap { height: 320px; } }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --twy: #6f7d8f; --rwy: #c9d3e0; } .adlabel.rwyno { color: #0e1726; } .adlabel.rwyno.bad { color: #fff; } }

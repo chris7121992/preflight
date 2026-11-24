@@ -3,9 +3,11 @@
 const wx = require('./wx');
 const { parseFlightPlan } = require('./parse');
 const { buildBriefing } = require('./brief');
+const notam = require('./notam');
 
 window.PreflightEngine = {
   configure: (o) => wx.configure(o),
+  parseNotams: (text) => notam.parse(text),
   async run(body) {
     const plan = parseFlightPlan(body.fileText || body.routeText || '', body.filename || '');
     return buildBriefing(plan, body);
