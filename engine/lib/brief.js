@@ -9,6 +9,8 @@ const { CE56X } = require('./aircraft');
 const sfcread = require('./sfcread');
 const simradar = require('./simradar');
 const fuelLib = require('./fuel');
+const fieldperf = require('./fieldperf');
+const perfLib = require('./perf');
 const nwp = require('./nwp');
 const routing = require('./routing');
 const minimums = require('./minimums');
@@ -238,7 +240,8 @@ async function buildBriefing(plan, input) {
     maxTailwindKt: Number(input.maxTailwind) || CE56X.maxTailwindKt,
     minCeiling: Number(input.minCeiling) || 200,
     minVis: Number(input.minVis) || 0.5,
-    minRunwayFt: Number(input.minRunway) || CE56X.minRunwayFt,
+    minRunwayFt: Number(input.minRunway) || null, // a personal floor; blank means the performance tables decide
+    ldwLb: input.ffFuel && isFinite(input.ffFuel.elw) && input.ffFuel.elw > 12000 && input.ffFuel.elw < 21000 ? Number(input.ffFuel.elw) : null,
     alternate: (input.alternate || '').toUpperCase().trim() || null,
     // Approach figures for the 135.223 / alternate-minimums tests. Defaults are generic Category C estimates;
     // the pilot should enter the values from the charts for the procedures actually planned.
@@ -505,7 +508,29 @@ async function buildBriefing(plan, input) {
       : cur && cur.wind;
     const ns = notamState(id, win[0], win[1]);
     const openApt = apt && ns.closedRwy.length ? { ...apt, runways: (apt.runways || []).filter((r) => !ns.closedRwy.some((it) => notam.sameRunway(it.name, r.id))) } : apt;
-    const rw = bestRunway(openApt, windSrc, opts);
+    // Runway length required, from the Flight Planning Guide tables at this weight, temperature and elevation
+    let field = null;
+    if (station.elev != null) {
+      const elevFt = Math.round(station.elev * 3.28084);
+      const mt = mods.map((m) => m.temp).filter((x) => x != null).sort((a, b) => a - b);
+      const tempC = hoursAhead > 1 && mt.length ? mt[Math.floor(mt.length / 2)] : cur && cur.temp != null ? Math.round(cur.temp) : mt.length ? mt[Math.floor(mt.length / 2)] : Math.round(fieldperf.isaC(elevFt));
+      const tempFrom = hoursAhead > 1 && mt.length ? 'model forecast' : cur && cur.temp != null ? 'current METAR' : mt.length ? 'model forecast' : 'standard temperature (none reported)';
+      if (role === 'departure') {
+        const assumed = !opts.towLb, w = Math.min(opts.towLb || perfLib.LIMITS.maxTakeoffLb, perfLib.LIMITS.maxTakeoffLb);
+        const t = fieldperf.takeoff({ weightLb: w, tempC, elevFt });
+        field = { kind: 'takeoff', weightLb: w, assumedWeight: assumed, overMax: !!(opts.towLb && opts.towLb > perfLib.LIMITS.maxTakeoffLb), tempC, tempFrom, elevFt, actualFt: t.ft, requiredFt: t.ft, flaps: t.flaps, reason: t.reason || null };
+      } else {
+        const assumed = !opts.ldwLb, w = Math.min(opts.ldwLb || perfLib.LIMITS.maxLandingLb, perfLib.LIMITS.maxLandingLb);
+        const l = fieldperf.landing({ weightLb: w, tempC, elevFt });
+        // Part 135 turbojets must be able to land within 60% of the runway (135.385, 135.387)
+        const factored = l.ft != null ? Math.ceil(l.ft / 0.6 / 10) * 10 : null;
+        field = { kind: 'landing', weightLb: w, assumedWeight: assumed, tempC, tempFrom, elevFt, actualFt: l.ft, factoredFt: factored, requiredFt: opts.rules === '135' ? factored : l.ft, vref: l.vref, reason: l.reason || null };
+      }
+      field.basis = `${field.kind === 'takeoff' ? `Takeoff field length, flaps ${field.flaps ?? 15}` : 'Landing distance'} at ${field.weightLb.toLocaleString('en-US')} lb${field.assumedWeight ? ` (maximum ${field.kind} weight assumed)` : ' (ForeFlight)'}, ${tempC}°C (${tempFrom}), ${elevFt.toLocaleString('en-US')} ft elevation; dry runway, zero wind`;
+      station.field = field;
+    }
+    const floorFt = Math.max(opts.minRunwayFt || 0, field && field.requiredFt ? field.requiredFt : opts.minRunwayFt ? 0 : CE56X.minRunwayFt);
+    const rw = bestRunway(openApt, windSrc, { ...opts, minRunwayFt: floorFt });
     if (pastedNotams) {
       station.notams = { count: (notamsBy[id] || []).length, closedRunways: ns.closedRwy.map((it) => it.name), closedTaxiways: [...new Set(ns.twy.map((it) => it.name))] };
       const tx = (n) => `${n.number || ''} ${n.summary}`.trim();
@@ -516,9 +541,21 @@ async function buildBriefing(plan, input) {
     }
     station.runway = rw;
     station.windUsed = windSrc;
+    const wetFlags = (cond && cond.flags) || {};
+    const wet = !!(wetFlags.rain || wetFlags.heavyRain || wetFlags.snow || wetFlags.freezingPrecip || wetFlags.thunder || wetFlags.drizzle || wetFlags.showers);
+    const caveat = `${field ? field.basis + '. ' : ''}The tables do not cover wet or contaminated runways, slope, wind or anti-ice on${wet ? ', and precipitation is forecast here' : ''}; the AFM governs.`;
+    if (field && field.requiredFt == null) add(field.assumedWeight ? 'caution' : 'nogo', 'Performance', `${id}: ${field.kind} not covered at this weight and temperature`, `${field.kind === 'takeoff' ? 'Takeoff' : 'Landing'} at ${field.weightLb.toLocaleString('en-US')} lb, ${field.tempC}°C and ${field.elevFt.toLocaleString('en-US')} ft is ${field.reason}. ${field.kind === 'takeoff' ? 'Reduce the takeoff weight or depart when it is cooler.' : 'Reduce the landing weight.'} ${field.assumedWeight ? `The maximum ${field.kind} weight was assumed; upload the ForeFlight briefing to use the planned weight. ` : ''}Check the AFM.`, id);
+    if (field && field.overMax) add('caution', 'Performance', `${id}: planned takeoff weight is above the maximum`, `ForeFlight shows a takeoff weight above ${perfLib.LIMITS.maxTakeoffLb.toLocaleString('en-US')} lb; the field length below is for ${perfLib.LIMITS.maxTakeoffLb.toLocaleString('en-US')} lb.`, id);
     if (rw && rw.none) add('nogo', 'Runway', `${id}: no runway meets ${CE56X.absoluteMinRunwayFt} ft`, `Longest hard-surface runway in the database is ${rw.longestFt} ft.`, id);
     else if (rw) {
-      if (rw.shortList) add('caution', 'Runway', `${id}: best wind runway shorter than ${opts.minRunwayFt} ft`, `Runway ${rw.id} (${rw.len} ft) is the best aligned option. Confirm landing/takeoff distance with current weight, temperature and runway condition (and 135 factoring if applicable).`, id);
+      if (field && field.requiredFt != null) {
+        rw.requiredFt = field.requiredFt; rw.marginFt = rw.len - field.requiredFt;
+        const what = field.kind === 'takeoff' ? 'takeoff field length' : opts.rules === '135' ? 'landing distance with the 60% factor' : 'landing distance';
+        if (rw.len < field.requiredFt) add('nogo', 'Runway', `${id}: runway ${rw.id} is shorter than the ${what}`, `Runway ${rw.id} is ${rw.len.toLocaleString('en-US')} ft; ${field.requiredFt.toLocaleString('en-US')} ft is needed${rw.longestFt > rw.len ? ` (longest runway ${rw.longestFt.toLocaleString('en-US')} ft)` : ''}. ${caveat}`, id);
+        else if (field.kind === 'landing' && opts.rules !== '135' && field.factoredFt > rw.len) add('caution', 'Runway', `${id}: runway ${rw.id} leaves less than the 60% landing margin`, `Landing distance is ${field.actualFt.toLocaleString('en-US')} ft on a ${rw.len.toLocaleString('en-US')} ft runway. That is legal under Part 91, but a Part 135 flight would need ${field.factoredFt.toLocaleString('en-US')} ft. ${caveat}`, id);
+        else if (rw.len < field.requiredFt * 1.15 || (wet && rw.len < field.requiredFt * 1.3)) add('caution', 'Runway', `${id}: runway ${rw.id} is close to the ${what}`, `Runway ${rw.id} is ${rw.len.toLocaleString('en-US')} ft against ${field.requiredFt.toLocaleString('en-US')} ft needed, a margin of ${(rw.len - field.requiredFt).toLocaleString('en-US')} ft. ${caveat}`, id);
+        if (opts.minRunwayFt && rw.len < opts.minRunwayFt) add('caution', 'Runway', `${id}: best wind runway shorter than your ${opts.minRunwayFt} ft minimum`, `Runway ${rw.id} (${rw.len} ft) is the best aligned option.`, id);
+      } else if (rw.shortList) add('caution', 'Runway', `${id}: best wind runway shorter than ${floorFt} ft`, `Runway ${rw.id} (${rw.len} ft) is the best aligned option. Confirm landing/takeoff distance with current weight, temperature and runway condition (and 135 factoring if applicable).`, id);
       if (rw.crossG > opts.maxXwind) add('nogo', 'Crosswind', `${id}: crosswind ${rw.crossG} kt exceeds ${opts.maxXwind} kt`, `Best runway ${rw.id} (${Math.round(rw.hdg)}°T): headwind ${rw.head} kt, crosswind ${rw.cross} kt steady / ${rw.crossG} kt gust, against the XLS+ maximum demonstrated crosswind of ${CE56X.maxDemoCrosswindKt} kt (limit set to ${opts.maxXwind} kt).`, id);
       else if (rw.crossG > opts.maxXwind * 0.75) add('caution', 'Crosswind', `${id}: crosswind ${rw.crossG} kt (gust) near limit`, `Runway ${rw.id}: crosswind ${rw.cross} kt steady / ${rw.crossG} kt gust against a ${opts.maxXwind} kt limit. Expect mechanical turbulence and gust-factor additives on Vref.`, id);
       if (rw.head < -opts.maxTailwindKt) add('nogo', 'Tailwind', `${id}: tailwind ${-rw.head} kt on best runway`, `Exceeds the ${opts.maxTailwindKt} kt tailwind limit.`, id);

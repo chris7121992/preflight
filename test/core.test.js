@@ -277,3 +277,18 @@ test('route strings: procedures are kept aside and every US fix is on file', () 
   for (const id of ['RAMBL', 'SNSET', 'PGLET', 'MUTEE', 'HUDAD', 'CEVEX']) assert.ok(nav(id) && nav(id)[0][2] === 'F', id);
   assert.strictEqual(nav('SBJ')[0][2], 'N');
 });
+
+test('runway length from the Flight Planning Guide tables', () => {
+  const f = require('../engine/lib/fieldperf');
+  // the guide's headline figures: 3,560 ft takeoff at MTOW and 3,180 ft landing at MLW, sea level, ISA
+  assert.deepStrictEqual(f.takeoff({ weightLb: 20200, tempC: 15, elevFt: 0 }), { ft: 3560, flaps: 15 });
+  assert.strictEqual(f.landing({ weightLb: 18700, tempC: 15, elevFt: 0 }).ft, 3180);
+  assert.strictEqual(f.landing({ weightLb: 18700, tempC: 15, elevFt: 0 }).vref, 117);
+  // between printed values, and hotter and higher needs more
+  const a = f.takeoff({ weightLb: 19000, tempC: 27, elevFt: 5433 });
+  assert.ok(a.flaps === 15 && a.ft > 4900 && a.ft < 5400, JSON.stringify(a));
+  // at the climb limit the guide's limit figure is used; beyond it there is no takeoff
+  assert.strictEqual(f.takeoff({ weightLb: 20200, tempC: 45, elevFt: 0 }).ft, 5280);
+  assert.strictEqual(f.takeoff({ weightLb: 20200, tempC: 38, elevFt: 5433 }).ft, null);
+  assert.strictEqual(f.takeoff({ weightLb: 20330, tempC: 20, elevFt: 0 }).ft, null);
+});
