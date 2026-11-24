@@ -204,7 +204,10 @@ async function windsAloft(points, cruiseFt) {
 const NWP_MODELS = ['ncep_hrrr_conus', 'ncep_nbm_conus', 'gfs_seamless', 'ecmwf_ifs025'];
 const NWP_VARS = ['temperature_2m', 'dew_point_2m', 'visibility', 'cloud_cover_low', 'precipitation', 'weather_code', 'wind_speed_10m', 'wind_direction_10m', 'wind_gusts_10m', 'cape', 'lifted_index', 'freezing_level_height'];
 async function nwpPoints(points) {
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${points.map((p) => p.lat.toFixed(3)).join(',')}&longitude=${points.map((p) => p.lon.toFixed(3)).join(',')}&hourly=${NWP_VARS.join(',')}&models=${NWP_MODELS.join(',')}&wind_speed_unit=kn&forecast_days=3&timezone=GMT`;
+  // reach far enough ahead to cover the latest time of interest (HRRR stops at 48 h; NBM, GFS and ECMWF go on)
+  const last = Math.max(...points.map((p) => p.to || 0), Date.now());
+  const days = Math.min(10, Math.max(3, Math.ceil((last - new Date().setUTCHours(0, 0, 0, 0)) / 864e5) + 1));
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${points.map((p) => p.lat.toFixed(3)).join(',')}&longitude=${points.map((p) => p.lon.toFixed(3)).join(',')}&hourly=${NWP_VARS.join(',')}&models=${NWP_MODELS.join(',')}&wind_speed_unit=kn&forecast_days=${days}&timezone=GMT`;
   const raw = await get(url, { ttlMs: 900e3 });
   const arr = Array.isArray(raw) ? raw : [raw];
   if (arr[0] && arr[0].error) throw new Error(arr[0].reason || 'Open-Meteo error');

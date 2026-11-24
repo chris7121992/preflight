@@ -198,3 +198,15 @@ test('ForeFlight briefing text: flight details and navigation log', () => {
   assert.strictEqual(f.routeText, 'KAAA SAALT PSX NLD KBBB');
   assert.strictEqual(parseBriefing('nothing here'), null);
 });
+
+test('future arrivals are judged on forecasts, never the current METAR', () => {
+  const { judgeBasis } = require('../engine/lib/brief');
+  const b = (o) => judgeBasis({ hoursAhead: 6, tafCovers: false, hasMetar: true, nModels: 0, role: 'destination', ...o });
+  assert.strictEqual(b({ tafCovers: true, nModels: 3 }), 'TAF');
+  assert.strictEqual(b({ nModels: 3 }), 'models');
+  assert.strictEqual(b({}), 'none', 'a METAR six hours before arrival decides nothing');
+  assert.strictEqual(b({ role: 'alternate' }), 'none');
+  assert.strictEqual(b({ hoursAhead: 0.5, tafCovers: true, nModels: 3 }), 'METAR');
+  assert.strictEqual(b({ hoursAhead: 0.5, hasMetar: false, tafCovers: true }), 'TAF');
+  assert.strictEqual(b({ role: 'departure' }), 'METAR');
+});

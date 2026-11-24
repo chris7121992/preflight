@@ -120,4 +120,4 @@ function icingLayers(upper) {
   return out;
 }
 
-module.exports = { analyze, icingLayers, wxText, MODEL_NAMES };
+module.exports = { modelWindow, analyze, icingLayers, wxText, MODEL_NAMES };

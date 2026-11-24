@@ -377,6 +377,13 @@ async function buildBriefing(plan, input) {
 
   // Station analysis (departure at ETD, destination & alternate at ETA)
   const stations = [];
+  const winOf = (role, tMs) => (role === 'departure' ? [tMs - 30 * 60e3, tMs + 60 * 60e3] : [tMs - 3600e3, tMs + 3600e3]);
+  let nwpStations = [], nwpRaw = null;
+  const modelsFor = (id, win) => {
+    const i = nwpStations.findIndex((x) => x.id === id);
+    const h = nwpRaw && i >= 0 && nwpRaw.data[i] && nwpRaw.data[i].hourly;
+    return h ? nwpRaw.models.map((m) => nwp.modelWindow(h, m, win[0], win[1])).filter(Boolean) : [];
+  };
   const analyzeStation = (id, role, tMs) => {
     const rep = reporting[id] || {};
     const metarList = metarsAll.filter((m) => m.icaoId === (rep.metarId || id)).sort((a, b) => b.obsTime - a.obsTime);
@@ -387,13 +394,17 @@ async function buildBriefing(plan, input) {
       if (rep.nearby) add(role === 'departure' ? 'info' : 'caution', 'Data', `${id}: using a nearby station's weather`, `${id} has no report of its own, so this uses ${repNote}. Nearby observations can differ from the field (terrain, sea breeze, fog). ${role === 'alternate' ? 'An alternate generally needs its own TAF to be legal under 91.169/135.221; confirm before filing it.' : 'Get the ATIS/AWOS before relying on it.'}`, id);
       else add('info', 'Data', `${id} reports weather as ${rep.metarId || rep.tafId}`, `The airport's weather is published under another identifier (${repNote}). ForeFlight or older databases may still use ${id}.`, id);
     }
-    const win = role === 'departure' ? [tMs - 30 * 60e3, tMs + 60 * 60e3] : [tMs - 3600e3, tMs + 3600e3];
+    const win = winOf(role, tMs);
     const periods = dec.tafWindow(taf, win[0], win[1]);
     const prevailing = periods.filter((p) => !p.temporary);
     const worstAll = dec.worstOf(periods);
     const worstPrev = dec.worstOf(prevailing.length ? prevailing : periods);
     const hoursAhead = (tMs - Date.now()) / 3600e3;
-    const useMetar = !taf || hoursAhead < 1;
+    // What to judge the time of interest on. The current METAR only speaks for the next hour or so; a flight
+    // further out is judged on forecasts: the TAF where it covers the window, otherwise the NWP models.
+    const near = hoursAhead < 1;
+    const basis = (nModels) => judgeBasis({ hoursAhead, tafCovers: !!(taf && periods.length), hasMetar: !!metar, nModels, role });
+    const mods = modelsFor(id, win);
     let cur = null;
     if (metar) {
       const ceil = dec.ceilingOf(metar.clouds, metar.vertVis);
@@ -404,25 +415,40 @@ async function buildBriefing(plan, input) {
     const station = { id, role, reportingAs: repNote || null, name: (apt && apt.name) || (metar && metar.name) || id, timeOfInterest: new Date(tMs).toISOString(), window: win.map((x) => new Date(x).toISOString()), metar: cur, taf: taf ? taf.rawTAF : null, tafPeriods: periods, forecast: taf ? { prevailing: worstPrev, worst: worstAll } : null, runway: null, elev: apt ? apt.elev : metar ? metar.elev : null };
 
     // Conditions to judge: forecast window (or METAR if close in / no TAF)
-    const cond = taf && periods.length && !useMetar ? worstPrev : cur ? { ceiling: cur.ceiling, vis: cur.vis, flags: cur.flags, spd: cur.wind.spd, gust: cur.wind.gst, category: cur.category } : null;
-    const worst = taf && periods.length && !useMetar ? worstAll : cond;
+    const curCond = cur ? { ceiling: cur.ceiling, vis: cur.vis, flags: cur.flags, spd: cur.wind.spd, gust: cur.wind.gst, category: cur.category } : null;
+    const modelCond = (pick) => {
+      if (!mods.length) return null;
+      const num = (f, none) => { const a = mods.map((m) => (f(m) == null ? none : f(m))).sort((x, y) => x - y); const v = pick === 'worst' ? a[0] : a[Math.floor((a.length - 1) / 2)]; return v === Infinity ? null : v; };
+      const ceiling = num((m) => m.ceilingEst, Infinity), vis = num((m) => m.vis, 10);
+      const hi = (f) => { const a = mods.map(f).filter((x) => x != null).sort((x, y) => x - y); return a.length ? a[Math.floor(a.length / 2)] : null; };
+      const cnt = (f) => mods.filter(f).length >= (pick === 'worst' ? 1 : 2);
+      return { ceiling, vis, category: dec.flightCategory(ceiling, vis), spd: hi((m) => m.windMax), gust: hi((m) => m.gustMax), flags: { ...(cnt((m) => m.wxCode != null && m.wxCode >= 95) ? { thunder: true } : {}), ...(cnt((m) => [56, 57, 66, 67].includes(m.wxCode)) ? { freezingPrecip: true } : {}) } };
+    };
+    // Departure keeps the METAR as a last resort when there is no forecast at all; an arrival more than an hour
+    // out is never judged on it.
+    const src = basis(mods.length);
+    const fromTaf = src === 'TAF', fromModels = src === 'models', fromMetar = src === 'METAR';
+    const cond = fromTaf ? worstPrev : fromModels ? modelCond('median') : fromMetar ? curCond : null;
+    const worst = fromTaf ? worstAll : fromModels ? modelCond('worst') : cond;
     station.judged = cond;
-    station.judgedFrom = taf && periods.length && !useMetar ? 'TAF' : cur ? 'METAR' : 'none';
+    station.judgedFrom = fromTaf ? 'TAF' : fromModels ? `models (${mods.map((m) => m.model).join(', ')})` : fromMetar ? 'METAR' : 'none';
+    station.modelsAtEta = mods.map((m) => ({ model: m.model, ceiling: m.ceilingEst, vis: m.vis, category: m.category }));
+    if (fromModels) add('caution', 'Data', `${id}: no TAF for ${fmtZ(win[0])}-${fmtZ(win[1])}, judged on model guidance`, `${taf ? 'The current TAF ends before this window' : `${id} has no TAF`}, so ceiling and visibility at ${role === 'alternate' ? 'the alternate ETA' : role === 'departure' ? 'departure time' : 'ETA'} come from the ${mods.map((m) => m.model).join(', ')} models (middle of the models: ${cond.ceiling != null ? `ceiling about ${cond.ceiling} ft` : 'no low ceiling'}, ${cond.vis ?? '?'} SM; worst model: ${worst.ceiling != null ? `${worst.ceiling} ft` : 'no low ceiling'}, ${worst.vis ?? '?'} SM). Model cloud bases are estimates, and models are not an official forecast for 91.169/135.213: re-check when a TAF covers that time${cur ? `. The current METAR (${cur.category}) is shown for reference only` : ''}.`, id);
     if (!cond) {
       const span = `${fmtZ(win[0])}-${fmtZ(win[1])}`;
       if (role === 'destination') {
         station.alternateRequired = true;
-        if (opts.rules === '135') add('nogo', 'Data', `${id}: no weather report or forecast`, `No METAR or TAF for ${id} covering ${span}. Part 135.213/135.219 require weather reports/forecasts for the destination; this flight cannot be dispatched IFR to ${id} as planned. Check whether the feed is temporarily out (call the FBO/ATIS) or plan to a reporting airport.`, id);
-        else add(opts.alternate ? 'caution' : 'nogo', 'Data', `${id}: no weather report or forecast`, `No METAR or TAF for ${id} covering ${span} (the station may be out of service or the feed delayed). Under 91.169 an alternate is required when no forecast is available${opts.alternate ? `, which you have (${opts.alternate}). Get the ATIS/FBO observation before departure and fuel for the alternate.` : '. Add one before departing.'}`, id);
+        if (opts.rules === '135') add('nogo', 'Data', `${id}: no weather report or forecast`, `No TAF or model forecast for ${id} covering ${span}${cur ? ', and the current METAR says nothing about an arrival that far out' : ', and no METAR'}. Part 135.213/135.219 require weather reports/forecasts for the destination; this flight cannot be dispatched IFR to ${id} as planned. Check whether the feed is temporarily out (call the FBO/ATIS) or plan to a reporting airport.`, id);
+        else add(opts.alternate ? 'caution' : 'nogo', 'Data', `${id}: no weather report or forecast`, `No TAF or model forecast for ${id} covering ${span}${cur ? '; the current METAR is not used for an arrival that far out' : ' and no METAR'} (${hoursAhead > 30 ? 'TAFs are not issued that far ahead and the models did not load' : 'the station may be out of service or the feed delayed'}). Under 91.169 an alternate is required when no forecast is available${opts.alternate ? `, which you have (${opts.alternate}). Get the ATIS/FBO observation before departure and fuel for the alternate.` : '. Add one before departing.'}`, id);
       } else if (role === 'departure') add('caution', 'Data', `${id}: no current report`, `No METAR/TAF for ${id}. Get the ATIS or a local observation before departure.`, id);
-      else add('nogo', 'Alternate', `${id}: no forecast for the alternate`, `An airport without a TAF cannot be used as an IFR alternate. Choose another.`, id);
+      else add('nogo', 'Alternate', `${id}: no forecast for the alternate`, `No TAF or model forecast covers ${span} at ${id}, so it cannot be shown to meet alternate minimums. Choose another or re-check closer to the flight.`, id);
       stations.push(station);
       return station;
     }
-    if (taf && !periods.length && hoursAhead > 1) add('caution', 'Data', `${id}: TAF does not cover ${fmtZ(tMs)}`, `The current TAF ends before the time of interest. Re-check when the next TAF is issued.`, id);
+    if (taf && !periods.length && hoursAhead > 1 && !fromModels) add('caution', 'Data', `${id}: TAF does not cover ${fmtZ(tMs)}`, `The current TAF ends before the time of interest. Re-check when the next TAF is issued.`, id);
 
     // Wind / runway
-    const windSrc = taf && periods.length && !useMetar
+    const windSrc = fromTaf
       ? (() => { let w = null; for (const p of periods) if (!w || (p.wind.gst || p.wind.spd) > (w.gst || w.spd)) w = p.wind; return w; })()
       : cur && cur.wind;
     const ns = notamState(id, win[0], win[1]);
@@ -452,7 +478,7 @@ async function buildBriefing(plan, input) {
     const fc = cond;
     const belowMins = (c) => (c.ceiling != null && c.ceiling < opts.minCeiling) || (c.vis != null && c.vis < opts.minVis);
     if (role === 'destination') {
-      if (belowMins(fc)) add('nogo', 'Ceiling/Vis', `${id}: forecast below approach minimums at ETA`, `${station.judgedFrom} for ${fmtZ(win[0])}-${fmtZ(win[1])} shows ceiling ${fc.ceiling ?? 'none'} ft / visibility ${fc.vis ?? '?'} SM, below the planning minimums of ${opts.minCeiling} ft / ${opts.minVis} SM.${opts.rules === '135' ? ' 14 CFR 135.219 prohibits departing for a destination forecast below authorized IFR landing minimums at ETA.' : ' Part 91 does not prohibit the departure, but there is no reasonable expectation of landing.'}`, id);
+      if (belowMins(fc)) add(fromModels ? 'caution' : 'nogo', 'Ceiling/Vis', `${id}: forecast below approach minimums at ETA`, `${station.judgedFrom} for ${fmtZ(win[0])}-${fmtZ(win[1])} shows ceiling ${fc.ceiling ?? 'none'} ft / visibility ${fc.vis ?? '?'} SM, below the planning minimums of ${opts.minCeiling} ft / ${opts.minVis} SM.${opts.rules === '135' ? ' 14 CFR 135.219 prohibits departing for a destination forecast below authorized IFR landing minimums at ETA.' : ' Part 91 does not prohibit the departure, but there is no reasonable expectation of landing.'}`, id);
       else if (worst && belowMins(worst)) add('caution', 'Ceiling/Vis', `${id}: TEMPO/PROB conditions below minimums`, `Temporary groups in the ETA window drop to ceiling ${worst.ceiling ?? 'none'} ft / ${worst.vis ?? '?'} SM. Carry extra fuel for holding and a solid alternate.`, id);
       // Alternate required?  Part 91: 91.169 (1-2-3).  Part 135: 135.223(b).
       const c = fc;
@@ -473,10 +499,18 @@ async function buildBriefing(plan, input) {
       altTest.worst = worst ? { ceiling: worst.ceiling, vis: worst.vis, ok: !fails(worst) } : null;
       station.alternateRequired = !!(fails(c) || fails(worst));
       altTest.required = station.alternateRequired;
+      altTest.basedOn = station.judgedFrom;
+      // Cross-check with each model: when most of them fall short, carry an alternate even if the TAF passes
+      altTest.models = mods.map((m) => ({ model: m.model, ceiling: m.ceilingEst, vis: m.vis, ok: !fails({ ceiling: m.ceilingEst, vis: m.vis }) }));
+      const mFail = altTest.models.filter((m) => !m.ok);
+      altTest.advised = !station.alternateRequired && altTest.models.length >= 2 && mFail.length * 2 > altTest.models.length;
+      station.alternateAdvised = altTest.advised;
       station.altTest = altTest;
-      const wxTxt = `Forecast for ${fmtZ(win[0])}-${fmtZ(win[1])}: ${c.ceiling != null ? `ceiling ${c.ceiling} ft` : 'no ceiling'}, visibility ${c.vis ?? '?'} SM${worst && (worst.ceiling !== c.ceiling || worst.vis !== c.vis) ? ` (TEMPO/PROB down to ${worst.ceiling != null ? worst.ceiling + ' ft' : 'no ceiling'} / ${worst.vis ?? '?'} SM)` : ''}.`;
+      const mTxt = altTest.models.length ? ` Models for the same window: ${altTest.models.map((m) => `${m.model} ${m.ceiling != null ? m.ceiling + ' ft' : 'no low ceiling'} / ${m.vis ?? '?'} SM${m.ok ? '' : ' (short)'}`).join(', ')}.` : '';
+      if (altTest.advised) add('caution', 'Alternate', `${id}: models suggest carrying an alternate`, `The ${station.judgedFrom} meets the ${altTest.rule} test, but ${mFail.map((m) => m.model).join(', ')} forecast less than ${altTest.ceilNeed.toLocaleString('en-US')} ft or ${altTest.visNeed} SM around ETA.${mTxt} ${opts.alternate ? `You have filed ${opts.alternate}.` : 'No alternate is filed; consider adding one and the fuel for it.'}`, id);
+      const wxTxt = `${fromTaf ? 'TAF' : fromModels ? 'Model guidance' : 'Current METAR (arrival within the hour)'} for ${fmtZ(win[0])}-${fmtZ(win[1])}: ${c.ceiling != null ? `ceiling ${c.ceiling} ft` : 'no ceiling'}, visibility ${c.vis ?? '?'} SM${worst && (worst.ceiling !== c.ceiling || worst.vis !== c.vis) ? ` (${fromModels ? 'worst model' : 'TEMPO/PROB down to'} ${worst.ceiling != null ? worst.ceiling + ' ft' : 'no ceiling'} / ${worst.vis ?? '?'} SM)` : ''}.`;
       const needTxt = `${altTest.rule} needs a ceiling of at least ${altTest.ceilNeed.toLocaleString('en-US')} ft (${altTest.basis}) and visibility of at least ${altTest.visNeed} SM (${altTest.visBasis}) from 1 hour before to 1 hour after ETA.`;
-      if (station.alternateRequired && !opts.alternate) add('nogo', 'Alternate', `${id}: alternate required (${altTest.rule}) but none filed`, `${wxTxt} ${needTxt} Add an alternate${opts.rules === '135' ? ', and carry fuel to the destination, then the alternate, then 45 minutes at normal cruise (135.223(a))' : ''}.`, id);
+      if (station.alternateRequired && !opts.alternate) add(fromModels ? 'caution' : 'nogo', 'Alternate', fromModels ? `${id}: models indicate an alternate will be required (${altTest.rule}); none filed` : `${id}: alternate required (${altTest.rule}) but none filed`, `${wxTxt} ${needTxt} Add an alternate${opts.rules === '135' ? ', and carry fuel to the destination, then the alternate, then 45 minutes at normal cruise (135.223(a))' : ''}.${mTxt}`, id);
       else if (station.alternateRequired) add('info', 'Alternate', `${id}: alternate required (${altTest.rule})`, `${wxTxt} ${needTxt} You have filed ${opts.alternate}${opts.rules === '135' ? '; fuel must cover destination, alternate and 45 minutes at normal cruise (135.223(a))' : ''}.`, id);
       else add('ok', 'Alternate', `${id}: no alternate required (${altTest.rule})`, `${wxTxt} ${needTxt}${altTest.estimate ? ' No published minimums were found for this airport, so the circling HAA is a 600 ft estimate; enter the chart value for an exact test.' : ''}`, id);
       if (altTest.auto) add('info', 'Alternate', `${id}: minimums read from the FAA charts (${altTest.source})`, `Category ${opts.approachCat}. Lowest circling: ${altTest.circling ? procTxt(altTest.circling) : 'none published'}. Approach used for visibility: ${procTxt(altTest.approach)}. Read automatically from the published charts; check them against the current chart and NOTAMs before relying on them.`, id);
@@ -535,13 +569,21 @@ async function buildBriefing(plan, input) {
     stations.push(station);
     return station;
   };
-  analyzeStation(dep.id, 'departure', opts.etd);
-  analyzeStation(dest.id, 'destination', etaMs);
+  const visits = [[dep.id, 'departure', opts.etd], [dest.id, 'destination', etaMs]];
   if (opts.alternate) {
     const altAp = aptInfo[opts.alternate];
     const altDist = altAp ? geo.distNm(dest, altAp) : null;
-    analyzeStation(opts.alternate, 'alternate', etaMs + ((altDist || 100) / 330) * 3600e3);
+    visits.push([opts.alternate, 'alternate', etaMs + ((altDist || 100) / 330) * 3600e3]);
   }
+  // Model guidance (HRRR / NBM / GFS / ECMWF) is fetched first so the terminal checks can use it
+  nwpStations = visits.map(([id, role, tMs]) => {
+    const a = aptInfo[id] || (id === dep.id ? dep : id === dest.id ? dest : null);
+    if (!a || !isFinite(a.lat)) return null;
+    const w = winOf(role, tMs);
+    return { id, role, lat: a.lat, lon: a.lon, from: w[0], to: w[1] };
+  }).filter(Boolean);
+  nwpRaw = nwpStations.length ? await wx.safe('Model guidance (HRRR/NBM/GFS/ECMWF)', () => wx.nwpPoints(nwpStations), errors) : null;
+  for (const v of visits) analyzeStation(...v);
 
   // ---- en-route hazards
   const hazards = [];
@@ -702,12 +744,7 @@ async function buildBriefing(plan, input) {
   }
 
   // ---- NWP model guidance (HRRR / NBM / GFS / ECMWF) at the terminals
-  const nwpStations = stations.map((st) => {
-    const a = aptInfo[st.id] || (st.id === dep.id ? dep : st.id === dest.id ? dest : null);
-    if (!a || !isFinite(a.lat)) return null;
-    return { id: st.id, role: st.role, lat: a.lat, lon: a.lon, from: Date.parse(st.window[0]), to: Date.parse(st.window[1]), tafCategory: st.judgedFrom === 'TAF' && st.judged ? st.judged.category : null, tafFlags: st.forecast && st.forecast.worst ? st.forecast.worst.flags : null };
-  }).filter(Boolean);
-  const nwpRaw = nwpStations.length ? await wx.safe('Model guidance (HRRR/NBM/GFS/ECMWF)', () => wx.nwpPoints(nwpStations), errors) : null;
+  for (const n of nwpStations) { const st = stations.find((x) => x.id === n.id); if (st) { n.tafCategory = st.judgedFrom === 'TAF' && st.judged ? st.judged.category : null; n.tafFlags = st.forecast && st.forecast.worst ? st.forecast.worst.flags : null; } }
   const models = { available: !!nwpRaw, source: 'NOAA HRRR, NBM and GFS and ECMWF IFS, decoded from GRIB2 by Open-Meteo', stations: nwp.analyze(nwpRaw, nwpStations, add) };
   const ice = nwp.icingLayers(upper);
   models.icingLayers = ice;
@@ -873,4 +910,14 @@ function sourceList(errors) {
   ].map(([name, desc]) => ({ name, desc, ok: !failed.has(name) }));
 }
 
-module.exports = { buildBriefing, bestRunway, buildProfile, resolveRoute };
+// Which source speaks for the time of interest: the METAR only within the hour, then the TAF if it covers the
+// window, then the NWP models. A departure with no forecast at all falls back to the METAR; an arrival does not.
+function judgeBasis({ hoursAhead, tafCovers, hasMetar, nModels, role }) {
+  const near = hoursAhead < 1;
+  if (tafCovers && !(near && hasMetar)) return 'TAF';
+  if (!(near && hasMetar) && nModels > 0) return 'models';
+  if (hasMetar && (near || role === 'departure')) return 'METAR';
+  return 'none';
+}
+
+module.exports = { buildBriefing, bestRunway, buildProfile, resolveRoute, judgeBasis };
