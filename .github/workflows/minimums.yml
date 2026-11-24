@@ -1,4 +1,5 @@
-# Rebuilds public/minimums (published approach minimums per airport) from the FAA d-TPP approach charts.
+# Rebuilds public/minimums (approach minimums from the FAA d-TPP charts) and public/procedures (SIDs and STARs
+# from the FAA NASR subscription).
 # The FAA issues a new chart cycle every 28 days; the script does nothing when the cycle on file is current.
 # Started by hand, by the daily cron, and by the weather refresh loop (GitHub's cron is unreliable here).
 name: Approach minimums
@@ -32,32 +33,28 @@ jobs:
         with:
           node-version: 22
 
-      - name: Check the chart cycle on file
-        id: check
+      - name: Build minimums, SIDs and STARs from FAA data
         run: |
           want=$(node -e "console.log(require('./scripts/minimums.js').cycleFor())")
-          have=$(node -e "try{console.log(require('./public/minimums/index.json').cycle)}catch(e){console.log('none')}")
-          echo "want=$want have=$have"
-          if [ "$want" != "$have" ] || [ "${{ inputs.force }}" = "true" ]; then echo "build=true" >> "$GITHUB_OUTPUT"; fi
-
-      - name: Build minimums from the FAA charts
-        if: steps.check.outputs.build == 'true'
-        run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
-          mkdir -p public/data
-          curl -fsSL --retry 3 -o public/data/airports.json https://preflight-29da3.web.app/data/airports.json
-          node scripts/minimums.js ${{ inputs.force && '--force' || '' }}
+          have() { node -e "try{console.log(require('./public/$1/index.json').cycle)}catch(e){console.log('none')}"; }
+          echo "want=$want minimums=$(have minimums) procedures=$(have procedures)"
+          if [ "$want" != "$(have minimums)" ] || [ "${{ inputs.force }}" = "true" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+            mkdir -p public/data
+            curl -fsSL --retry 3 -o public/data/airports.json https://preflight-29da3.web.app/data/airports.json
+            node scripts/minimums.js ${{ inputs.force && '--force' || '' }}
+          fi
+          node scripts/procedures.js ${{ inputs.force && '--force' || '' }}
 
       - name: Commit and redeploy
-        if: steps.check.outputs.build == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A public/minimums
+          git add -A public/minimums public/procedures
           if git diff --cached --quiet; then echo "no change"; exit 0; fi
-          git commit -q -m "Approach minimums for FAA chart cycle $(node -e "console.log(require('./public/minimums/index.json').cycle)")"
+          git commit -q -m "Approach minimums, SIDs and STARs for FAA cycle $(node -e "console.log(require('./public/procedures/index.json').cycle)")"
           git pull -q --rebase origin main
           git push origin HEAD:main
           gh workflow run refresh-weather.yml --repo "${{ github.repository }}" --ref main

@@ -119,3 +119,11 @@ out-of-service approach aids are removed from the runway, crosswind and approach
 `public/notam.js` draws them on a diagram from `public/layout/<ID>.json` (runway and taxiway shapes from
 OpenStreetMap, built by the `Airport layouts` workflow), falling back to a live OpenStreetMap query and then to
 a runway-only sketch. Layout data © OpenStreetMap contributors (ODbL).
+
+## SIDs, STARs and approaches
+
+`scripts/procedures.js` builds `public/procedures/<FAA id>.json` from the FAA NASR 28-day subscription (DP, STAR,
+FIX and NAV CSV files); it runs in the `Approach minimums` workflow each cycle. `engine/lib/procedures.js` picks
+the SID and STAR that serve the wind-favored runway (minus NOTAM-closed runways), stay closest to the route and
+cross the least weather, and names the lowest-minimums approach to the landing runway against the forecast.
+ATC assigns the real procedures; this is a planning suggestion.

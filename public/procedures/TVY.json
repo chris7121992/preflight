@@ -1,0 +1,1 @@
+{"id":"TVY","cycle":"2611","sids":[{"code":"STACO2.STACO","name":"STACO","rnav":true,"bodies":[{"name":"HOKPI-STACO","rwys":["17"],"pts":[["HOKPI",40.64055,-112.45294],["ZESER",40.73595,-112.41952],["STACO",40.8222,-112.4196]]},{"name":"ZESER-STACO","rwys":["35"],"pts":[["ZESER",40.73595,-112.41952],["STACO",40.8222,-112.4196]]}],"transitions":[]}],"stars":[]}

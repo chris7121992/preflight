@@ -11,6 +11,7 @@ const nwp = require('./nwp');
 const routing = require('./routing');
 const minimums = require('./minimums');
 const notam = require('./notam');
+const procedures = require('./procedures');
 
 const fmtZ = (ms) => {
   const d = new Date(ms);
@@ -702,6 +703,36 @@ async function buildBriefing(plan, input) {
   const navaidsAll = await wx.allNavaids().catch(() => null);
   const routeOpts = routing.routeOptions({ route, opts, buildProfile, hazards: hzInputs, navaids: navaidsAll, windComp });
   const altOpts = routing.altitudeOptions({ route, opts, buildProfile, hazards: hzInputs, windAt });
+  // ---- SID, STAR and approach for the recommended route
+  let procs = null;
+  {
+    const baseRoute = routeOpts.recommendation.keepFiled ? route : routeOpts.recommendation.best.points;
+    const idsOf = (id) => { const a = aptInfo[id]; return [id, ...(a ? [a.icaoId, a.faaId, ...(a.aliases || [])] : [])]; };
+    const [depRec, destRec] = await Promise.all([dep.id, dest.id].map((id) => wx.safe('SIDs and STARs (FAA NASR)', () => wx.procedures(idsOf(id)), errors)));
+    const depSt = stations.find((x) => x.role === 'departure'), destSt = stations.find((x) => x.role === 'destination');
+    const depRwy = depSt && depSt.runway && !depSt.runway.none ? depSt.runway.id : null, destRwy = destSt && destSt.runway && !destSt.runway.none ? destSt.runway.id : null;
+    const hzSet = routing.hazardSet(hzInputs);
+    const sid = depRec ? procedures.choose('sids', depRec, { airport: dep, runway: depRwy, route: baseRoute, hz: hzSet, opts, etaMs }) : null;
+    const star = destRec ? procedures.choose('stars', destRec, { airport: dest, runway: destRwy, route: baseRoute, hz: hzSet, opts, etaMs }) : null;
+    const destNs = destSt ? notamState(dest.id, Date.parse(destSt.window[0]), Date.parse(destSt.window[1])) : null;
+    const fcst = destSt && destSt.judged ? { ceiling: destSt.judged.ceiling, vis: destSt.judged.vis } : null;
+    const appr = procedures.approach(minimums, mins[dest.id], { cat: opts.approachCat, runway: destRwy, skip: destNs ? approachSkip(destNs) : null, forecast: fcst });
+    const full = procedures.assemble({ route: baseRoute, sid, star });
+    const why = (x, kind) => `${x.pick.code}${x.pick.transition ? ` (${x.pick.name} ${kind}, ${x.pick.transition} transition)` : ` (${x.pick.name} ${kind})`}: ${x.runway ? `${x.anyRunway ? `not published for runway ${x.runway}, so confirm the runway with ATC` : `serves runway ${x.runway}`}` : 'runway not known'}, ${x.pick.onFiledRoute ? `ends at ${x.pick.fix} on your route` : `${kind === 'SID' ? 'leaves' : 'starts'} at ${x.pick.fix}, ${x.pick.extraNm ? `about ${x.pick.extraNm} nm longer than direct` : 'no extra distance'}`}${x.pick.wx.hits.length ? `, crosses ${x.pick.wx.hits.join('; ')}` : ', clear of advisories'}`;
+    procs = {
+      route: full, base: routeOpts.recommendation.keepFiled ? 'filed route' : routeOpts.recommendation.best.name,
+      sid: sid ? { ...sid, text: why(sid, 'SID') } : null, star: star ? { ...star, text: why(star, 'STAR') } : null, approach: appr,
+      depRunway: depRwy, destRunway: destRwy,
+      notes: [!depRec ? `No SID is published for ${dep.id}; expect radar vectors or the obstacle departure procedure.` : '', !destRec ? `No STAR is published for ${dest.id}.` : '', !appr ? `No approach minimums are on file for ${dest.id}.` : ''].filter(Boolean),
+    };
+    if (appr) {
+      const o = appr.pick;
+      procs.approach.text = `${o.proc}${appr.forRunway ? '' : ` (no straight-in approach to runway ${destRwy || '?'} is available, so this is the lowest to another runway${appr.circling ? `; circling ${appr.circling.alt} ft MSL / ${appr.circling.vis} SM` : ''})`}: ${o.line} ${o.alt} ft MSL (${o.hat} ft above), ${o.vis} SM, Cat ${opts.approachCat}. ${fcst ? `Forecast ${fcst.ceiling != null ? `ceiling ${fcst.ceiling} ft` : 'no ceiling'} / ${fcst.vis ?? '?'} SM is ${appr.aboveMinimums ? 'above' : 'BELOW'} these minimums${appr.visual ? ', and good enough for a visual approach' : ''}.` : ''}${appr.backups.length ? ` Backup: ${appr.backups.map((b) => `${b.proc} (${b.hat} ft / ${b.vis} SM)`).join(', ')}.` : ''}`;
+      if (!appr.aboveMinimums) add('caution', 'Routing', `${dest.id}: forecast below minimums for ${o.proc}`, procs.approach.text, dest.id);
+    }
+    if (sid || star) add('info', 'Routing', `Recommended route: ${full.string}`, [sid ? procs.sid.text : '', star ? procs.star.text : '', appr ? `Expect ${procs.approach.text}` : '', 'ATC assigns the actual SID, STAR and approach; check the charts for altitude, speed and equipment restrictions.'].filter(Boolean).join(' '), 'routing');
+    for (const x of [sid, star]) if (x && x.pick.wx.score >= 15 && x.options.some((o) => o.wx.score < x.pick.wx.score * 0.6)) add('caution', 'Routing', `${x.pick.code} crosses weather`, `${x.pick.wx.hits.join('; ')}.`, 'routing');
+  }
   if (!routeOpts.recommendation.keepFiled) add('info', 'Routing', `Weather re-route option: ${routeOpts.recommendation.best.name}`, routeOpts.recommendation.text, 'routing');
   if (altOpts.best !== Math.round(opts.cruiseAlt / 1000) * 10 && !/as good as any/.test(altOpts.text)) add('info', 'Routing', `Altitude option: FL${altOpts.best}`, altOpts.text, 'routing');
 
@@ -751,7 +782,7 @@ async function buildBriefing(plan, input) {
     range: rangeCheck,
     surface,
     models,
-    routing: { route: routeOpts, altitude: altOpts },
+    routing: { route: routeOpts, altitude: altOpts, procedures: procs },
     charts: wx.wpc.charts(),
     notams: notamInfo,
     sources: sourceList(errors),
@@ -818,6 +849,7 @@ function sourceList(errors) {
     ['En-route METARs', 'aviationweather.gov Data API'],
     ['Regional METARs', 'aviationweather.gov Data API (for Collins-method contrast, moisture and upstream checks)'],
     ['Model guidance (HRRR/NBM/GFS/ECMWF)', 'NOAA HRRR/NBM/GFS and ECMWF IFS point forecasts, decoded from GRIB2 by Open-Meteo'],
+    ['SIDs and STARs (FAA NASR)', 'FAA NASR 28-day subscription: departure procedures and STARs with their fixes'],
     ['Approach minimums (FAA d-TPP)', 'FAA digital Terminal Procedures: landing minimums and Alternate Minimums pages, rebuilt each 28-day chart cycle'],
     ['NOTAMs (FAA API)', 'FAA NOTAM API (optional credentials)'],
   ].map(([name, desc]) => ({ name, desc, ok: !failed.has(name) }));

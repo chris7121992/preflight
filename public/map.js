@@ -298,6 +298,13 @@
     if (rec && !rec.keepFiled && rec.best && rec.best.points) {
       L.polyline(rec.best.points.map((p) => [p.lat, p.lon]), { color: '#16a34a', weight: 3.5, dashArray: '9 7' }).bindTooltip(`Suggested re-route: ${rec.best.name}`, { sticky: true }).addTo(groups.route);
     }
+    const pr = b.routing && b.routing.procedures;
+    for (const [x, kind, end] of pr ? [[pr.sid, 'SID', b.plan.route[0]], [pr.star, 'STAR', b.plan.route[b.plan.route.length - 1]]] : []) {
+      if (!x) continue;
+      const pts = kind === 'SID' ? [end, ...x.pick.points] : [...x.pick.points, end];
+      L.polyline(pts.map((p) => [p.lat, p.lon]), { color: '#0d9488', weight: 3 }).bindTooltip(`${kind} ${x.pick.code}`, { sticky: true }).addTo(groups.route);
+      for (const p of x.pick.points) L.circleMarker([p.lat, p.lon], { radius: 3, color: '#0d9488', fillColor: '#fff', fillOpacity: 1, weight: 1.5 }).bindTooltip(p.id, { direction: 'right', className: 'wp-label' }).addTo(groups.route);
+    }
     for (const f of (b.surface && b.surface.fronts) || []) if (f.crossesRoute && f.encounter) {
       L.circleMarker([f.encounter.lat, f.encounter.lon], { radius: 8, color: '#b45309', weight: 3, fill: false }).bindTooltip(`Meets ${f.name} ~${z(Date.parse(f.encounter.time))} (${f.encounter.alongRouteNm} nm)`).addTo(groups.route);
     }

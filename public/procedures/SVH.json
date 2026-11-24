@@ -1,0 +1,1 @@
+{"id":"SVH","cycle":"2611","sids":[],"stars":[{"code":"KABEE.KABEE3","name":"KABEE","rnav":true,"bodies":[{"name":"KABEE-NASCR","rwys":["ALL"],"pts":[["KABEE",34.66105,-80.16282],["BIFFL",35.05194,-80.41862],["NASCR",35.45555,-80.53865]]}],"transitions":[{"code":"COPEL.KABEE3","name":"COPEL","pts":[["COPEL",34.37047,-79.85943],["KABEE",34.66105,-80.16282]]}]}]}

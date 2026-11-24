@@ -271,7 +271,17 @@ function renderRouting(b) {
   if (!r) { $('routing').innerHTML = '<p>Route options unavailable.</p>'; return; }
   const rec = r.route.recommendation, alt = r.altitude;
   const hm = (m) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
-  $('routing').innerHTML = `
+  const pr = r.procedures;
+  const procRow = (label, x, kind) => (x ? `<tr><td><b>${label}</b></td><td><code>${esc(x.pick.code)}</code>${x.pick.rnav ? ' <span class="chip">RNAV</span>' : ''}</td><td>${esc(x.text.replace(/^[^:]*: /, ''))}${x.options.length > 1 ? `<div class="hint">Other ${kind}s: ${x.options.slice(1).map((o) => `${esc(o.code)} (${o.extraNm ? '+' + o.extraNm + ' nm' : 'same distance'}${o.wx.hits.length ? ', crosses weather' : ''})`).join(', ')}</div>` : ''}</td></tr>` : '');
+  const procHtml = pr && (pr.sid || pr.star || pr.approach) ? `
+    <div class="rec"><b>Recommended route with procedures</b>Built on the ${esc(pr.base)}${pr.depRunway ? `, departing runway ${esc(pr.depRunway)}` : ''}${pr.destRunway ? `, landing runway ${esc(pr.destRunway)}` : ''} (the runways the wind favors${b.notams && b.notams.source === 'briefing' ? ' and NOTAMs leave open' : ''}).<div class="raw">${esc(pr.route.string)}</div></div>
+    <div class="table-wrap"><table>
+      ${procRow('SID', pr.sid, 'SID')}${procRow('STAR', pr.star, 'STAR')}
+      ${pr.approach ? `<tr><td><b>Approach</b></td><td><code>${esc(pr.approach.pick.proc)}</code></td><td>${esc(pr.approach.text.replace(/^[^:]*: /, ''))} ${pr.approach.chart ? `<a href="${esc(pr.approach.chart)}" target="_blank" rel="noopener">chart</a>` : ''}</td></tr>` : ''}
+    </table></div>
+    ${pr.notes.length ? `<p class="hint">${esc(pr.notes.join(' '))}</p>` : ''}
+    <p class="hint">ATC assigns the actual SID, STAR and approach. Check each chart for altitude, speed and equipment restrictions.</p>` : pr && pr.notes.length ? `<p class="hint">${esc(pr.notes.join(' '))}</p>` : '';
+  $('routing').innerHTML = `${procHtml}
     <div class="rec ${rec.keepFiled ? '' : 'change'}"><b>${rec.keepFiled ? 'Keep the filed route' : `Consider ${esc(rec.best.name)}`}</b>${esc(rec.text)}${!rec.keepFiled && rec.best.routeString ? `<div class="raw">${esc(rec.best.routeString)}</div>` : ''}</div>
     <h3>Lateral options</h3>
     <div class="table-wrap"><table><tr><th>Option</th><th>Distance</th><th>ETE</th><th>Weather exposure</th><th>Meets</th></tr>

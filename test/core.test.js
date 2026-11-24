@@ -155,3 +155,23 @@ test('NOTAM text: closures, partial closures and times', () => {
   assert.strictEqual(grouped.KHOU.length, 6);
   assert.ok(!notam.activeIn(by['HOU 11/063'], Date.UTC(2026, 10, 26), Date.UTC(2026, 10, 26, 2)));
 });
+
+test('procedures: SID and STAR picked for runway and direction of flight', () => {
+  const procedures = require('../engine/lib/procedures');
+  const dep = { id: 'KAAA', lat: 30, lon: -95 }, dest = { id: 'KBBB', lat: 30, lon: -85 };
+  const route = [dep, { id: 'MIDDD', lat: 30.2, lon: -90 }, dest];
+  const sids = { sids: [
+    { code: 'EAST1.EASTT', name: 'EAST', rnav: true, bodies: [{ name: 'AAA-EASTT', rwys: ['04', '22'], pts: [['EASTT', 30, -94.5]] }], transitions: [{ code: 'EAST1.FARRE', name: 'FARRE', pts: [['EASTT', 30, -94.5], ['FARRE', 30.1, -93.5]] }] },
+    { code: 'WEST1.WESTT', name: 'WEST', rnav: true, bodies: [{ name: 'AAA-WESTT', rwys: ['04', '22'], pts: [['WESTT', 30, -95.6]] }], transitions: [] },
+    { code: 'ONLY13.EASTT', name: 'ONLY', rnav: false, bodies: [{ name: 'X-EASTT', rwys: ['13'], pts: [['EASTT', 30, -94.5]] }], transitions: [] },
+  ] };
+  const s = procedures.choose('sids', sids, { airport: dep, runway: '4', route, hz: null, opts: { cruiseAlt: 41000, etd: 0 }, etaMs: 7200e3 });
+  assert.strictEqual(s.pick.procCode, 'EAST1.EASTT');
+  assert.ok(!s.options.some((o) => o.procCode === 'ONLY13.EASTT'));
+  const stars = { stars: [{ code: 'INNN.INNN2', name: 'INNN', rnav: true, bodies: [{ name: 'INNN-BBB', rwys: ['ALL'], pts: [['INNN', 30, -86], ['CLOSE', 30, -85.4]] }], transitions: [{ code: 'MIDDD.INNN2', name: 'MIDDD', pts: [['MIDDD', 30.2, -90], ['INNN', 30, -86]] }] }] };
+  const t = procedures.choose('stars', stars, { airport: dest, runway: '9', route, hz: null, opts: { cruiseAlt: 41000, etd: 0 }, etaMs: 7200e3 });
+  assert.strictEqual(t.pick.code, 'MIDDD.INNN2');
+  assert.ok(t.pick.onFiledRoute);
+  const full = procedures.assemble({ route, sid: s, star: t });
+  assert.strictEqual(full.string, `KAAA ${s.pick.code} MIDDD.INNN2 KBBB`);
+});

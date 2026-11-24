@@ -227,18 +227,18 @@ async function notams(ids) {
   return out;
 }
 
-// Published approach minimums for one airport (static files built each FAA chart cycle by scripts/minimums.js).
-async function minimums(ids) {
-  const base = config.minimums || (config.snapshot ? config.snapshot.replace(/\/data\/?$/, '/minimums') : null);
+// Per-airport static files built by the scripts: 'minimums' (FAA approach minimums) and 'procedures' (SIDs/STARs).
+async function staticRec(kind, ids) {
+  const base = config[kind] || (config.snapshot ? config.snapshot.replace(/\/data\/?$/, `/${kind}`) : null);
   if (!base) return null;
   let have = null;
   if (typeof base === 'string') {
-    if (!cache.has('mins:index')) cache.set('mins:index', fetch(`${base}/index.json`).then((r) => (r.ok ? r.json() : null)).then((j) => (j && Array.isArray(j.airports) ? new Set(j.airports) : null)).catch(() => null));
-    have = await cache.get('mins:index');
+    if (!cache.has(`${kind}:index`)) cache.set(`${kind}:index`, fetch(`${base}/index.json`).then((r) => (r.ok ? r.json() : null)).then((j) => (j && Array.isArray(j.airports) ? new Set(j.airports) : null)).catch(() => null));
+    have = await cache.get(`${kind}:index`);
   }
   for (const id of [...new Set(ids.filter(Boolean))]) {
     if (!/^[A-Z0-9]{3,4}$/.test(id) || (have && !have.has(id))) continue;
-    const key = `mins:${id}`;
+    const key = `${kind}:${id}`;
     if (cache.has(key)) { const v = cache.get(key); if (v) return v; continue; }
     let rec = null;
     try {
@@ -253,7 +253,9 @@ async function minimums(ids) {
   }
   return null;
 }
+const minimums = (ids) => staticRec('minimums', ids);
+const procedures = (ids) => staticRec('procedures', ids.flatMap((id) => (/^K[A-Z]{3}$/.test(id || '') ? [id.slice(1), id] : [id])));
 
 async function allNavaids() { return config.snapshot ? snap('navaids.json') : null; }
 
-module.exports = { minimums, allNavaids, configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nwpPoints, NWP_MODELS, nearestLevel, altToHpa, notams };
+module.exports = { minimums, procedures, allNavaids, configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nwpPoints, NWP_MODELS, nearestLevel, altToHpa, notams };

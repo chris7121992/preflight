@@ -154,6 +154,8 @@
     if (b.routing) {
       section('Route and altitude options');
       para(b.routing.route.recommendation.text, { size: 7.2, gap: 3 });
+      const pr = b.routing.procedures;
+      if (pr && (pr.sid || pr.star || pr.approach)) para(`Recommended route: ${pr.route.string}.${pr.sid ? ' SID ' + pr.sid.text + '.' : ''}${pr.star ? ' STAR ' + pr.star.text + '.' : ''}${pr.approach ? ' Expect ' + pr.approach.text : ''}`, { size: 7.2, gap: 3 });
       para(b.routing.altitude.text, { size: 7.2, gap: 4 });
       const rowsA = b.routing.altitude.rows;
       table({
