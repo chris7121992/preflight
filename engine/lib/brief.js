@@ -205,6 +205,7 @@ async function buildBriefing(plan, input) {
     altGps: !!input.altGps,
     highMinsPic: !!input.highMinsPic,
     notamText: typeof input.notamText === 'string' ? input.notamText.slice(0, 2e6) : '',
+    towLb: input.ffFuel && isFinite(input.ffFuel.tow) && input.ffFuel.tow > 12000 && input.ffFuel.tow < 21000 ? Number(input.ffFuel.tow) : null,
     ffFuel: input.ffFuel && typeof input.ffFuel === 'object' ? Object.fromEntries(Object.entries(input.ffFuel).filter(([, v]) => typeof v === 'number' && isFinite(v))) : null,
   };
   if (opts.highMinsPic) { opts.minCeiling += 100; opts.minVis += 0.5; }
@@ -829,7 +830,7 @@ async function buildBriefing(plan, input) {
     const ff = opts.ffFuel && opts.ffFuel.flight ? opts.ffFuel : null;
     fuel = fuelLib.recommend({
       rules: opts.rules, distNm: ff && ff.distNm ? ff.distNm : Math.round(prof.totalNm), eteMin: Math.round((etaMs - opts.etd) / 60e3),
-      cruiseFlow: plannedRow ? Math.round((plannedRow.fuelLb / plannedRow.eteMin) * 60) : null, estTripLb: plannedRow ? plannedRow.fuelLb : null,
+      cruiseFlow: plannedRow ? plannedRow.cruiseFlow : null, estTripLb: plannedRow ? plannedRow.fuelLb : null,
       windHeadKt: avgComp != null ? -avgComp : null, ff,
       alternate: { id: opts.alternate || null, filed: !!opts.alternate, required: !!(destSt && destSt.alternateRequired), advised: !!(destSt && destSt.alternateAdvised), distNm: opts.alternate && altLeg ? altLeg : null },
       flags: { convection: conv.length ? conv[0].title : null, hold: holdWhy, holdMin: jc === 'LIFR' ? 30 : 20, icing: ice.length ? ice[0].title : null },

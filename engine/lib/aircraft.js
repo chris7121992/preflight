@@ -5,7 +5,7 @@ module.exports = {
   CE56X: {
     name: 'Cessna Citation XLS+ (560XL)',
     maxAltitudeFt: 45000,
-    cruiseKtas: 430, // typical high-speed cruise ~430-441 KTAS
+    cruiseKtas: 430, // high speed cruise is 431-433 KTAS at FL350-390 (XLS+ Flight Planning Guide)
     climbDescentAvgKt: 300,
     stillAirRangeNm: 1850, // NBAA IFR reserves, ~4 pax
     maxDemoCrosswindKt: 25,

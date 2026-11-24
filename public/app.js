@@ -323,7 +323,7 @@ function renderRouting(b) {
     <div class="table-wrap"><table><tr><th>Level</th><th>ETE</th><th>Wind comp</th><th>ISA dev</th><th>Fuel (est.)</th><th>Advisories at level</th></tr>
     ${alt.rows.map((x) => `<tr class="${x.fl === alt.best ? 'best' : ''}"><td>FL${x.fl}</td><td class="num">${hm(x.eteMin)}</td><td class="num ${x.windComponent < 0 ? 'head' : 'tail'}">${x.windComponent == null ? '—' : (x.windComponent > 0 ? '+' : '') + x.windComponent + ' kt'}</td><td class="num">${x.isaDev == null ? '—' : (x.isaDev > 0 ? '+' : '') + x.isaDev + '°C'}</td><td class="num">${x.fuelLb.toLocaleString()} lb</td><td>${x.hits.length ? esc(x.hits.join('; ')) : '—'}</td></tr>`).join('')}
     </table></div>
-    <p class="hint">Exposure counts nm inside SIGMETs, Convective SIGMETs (20 nm buffer), CWAs and G-AIRMET icing/turbulence at your altitude and time, plus severe/moderate PIREPs and thunderstorm METARs near the path. Fuel is a rough XLS+ planning estimate. Options are offsets of the direct course; file through ATC-preferred routes and check airspace.</p>`;
+    <p class="hint">Exposure counts nm inside SIGMETs, Convective SIGMETs (20 nm buffer), CWAs and G-AIRMET icing/turbulence at your altitude and time, plus severe/moderate PIREPs and thunderstorm METARs near the path. Trip fuel is from the XLS+ Flight Planning Guide tables (climb, high speed cruise, normal descent) at ISA, with the winds at each level. Options are offsets of the direct course; file through ATC-preferred routes and check airspace.</p>`;
 }
 
 function renderModels(b) {

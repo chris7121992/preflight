@@ -1,4 +1,5 @@
 'use strict';
+const perf = require('./perf');
 // Weather-based route and altitude options. Candidate routes are lateral offsets of the direct course
 // (two turn points at 30% and 70% of the way); each is scored for exposure to the same advisories and
 // reports the briefing uses, plus the time a longer route costs. Altitudes are compared on the filed route
@@ -135,9 +136,9 @@ function altitudeOptions({ route, opts, buildProfile, hazards: hzIn, windAt }) {
     const prof = buildProfile(route, o, wc ? wc.comp : null);
     const ex = exposure(prof.samples.filter((s) => s.phase === 'cruise'), hz);
     const eteMin = Math.round((prof.eta - opts.etd) / 60e3);
-    // Rough XLS+ cruise fuel flow (lb/h): about 1,400 at FL410, rising roughly 60 lb/h per 1,000 ft lower. Planning estimate only.
-    const flow = fl <= 410 ? 1400 + (410 - fl) * 6 : 1400 - (fl - 410) * 1.5;
-    rows.push({ fl, eteMin, fuelLb: Math.round((flow * eteMin) / 60 / 50) * 50, windComponent: wc ? wc.avg : null, isaDev: wc ? wc.isa : null, score: ex.score, hits: ex.hits });
+    // Trip fuel from the XLS+ Flight Planning Guide tables (climb, high speed cruise, normal descent; ISA)
+    const tp = perf.trip({ distNm: prof.totalNm, altFt: fl * 100, towLb: opts.towLb || 18500, windKt: wc && wc.avg != null ? wc.avg : 0, tasKt: opts.tas });
+    rows.push({ fl, eteMin, fuelLb: Math.round(tp.lb / 10) * 10, cruiseFlow: tp.cruiseFlow, windComponent: wc ? wc.avg : null, isaDev: wc ? wc.isa : null, score: ex.score, hits: ex.hits });
   }
   const minEte = Math.min(...rows.map((r) => r.eteMin));
   const minFuel = Math.min(...rows.map((r) => r.fuelLb));

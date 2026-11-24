@@ -101,7 +101,7 @@
       ['Avg wind component', `${r.avgWindComponentKt != null ? (r.avgWindComponentKt > 0 ? '+' : '') + r.avgWindComponentKt + ' kt' : '-'}`],
       ['ESAD (route + alt)', `${r.equivalentStillAirNm ?? '-'} nm of ~${r.stillAirRangeNm ?? '-'} nm`],
       [`Alternate (${dest && dest.altTest ? dest.altTest.rule : p.rules === '135' ? '135.223' : '91.169'})`, dest ? (dest.alternateRequired ? 'REQUIRED' : dest.alternateAdvised ? 'advised by models' : 'not required') + (dest.altTest ? ` (needs ${dest.altTest.ceilNeed} ft / ${dest.altTest.visNeed} SM)` : '') : '-'],
-      ['Fuel', b.fuel ? `recommend ${b.fuel.recommendedLb.toLocaleString('en-US')} lb${b.fuel.plannedLb != null ? ` (planned ${b.fuel.plannedLb.toLocaleString('en-US')})` : ' (estimate)'}` : '-'],
+      ['Fuel', b.fuel ? `recommend ${b.fuel.recommendedLb.toLocaleString('en-US')} lb${b.fuel.plannedLb != null ? ` (planned ${b.fuel.plannedLb.toLocaleString('en-US')})` : ' (from the planning guide)'}` : '-'],
       ['Best altitude (wx/wind/fuel)', alt ? `FL${alt.best}` : '-'],
       ['Route option', rec ? (rec.keepFiled ? 'Keep filed route' : clip(rec.best.name, 60)) : '-'],
       ['Flow aloft', b.surface && b.surface.reading ? `${({ sw: 'SW - supports lows', nw: 'NW - clearing', w: 'flat W - little support' })[b.surface.reading.flow] || '-'}${b.surface.reading.lapse != null ? `; lapse ${b.surface.reading.lapse} C/1000 ft` : ''}` : '-'],
@@ -222,7 +222,7 @@
           ['ETE', ...rowsA.map((x) => hm(x.eteMin))],
           ['Wind comp (kt)', ...rowsA.map((x) => (x.windComponent == null ? '-' : (x.windComponent > 0 ? '+' : '') + x.windComponent))],
           ['ISA dev (C)', ...rowsA.map((x) => (x.isaDev == null ? '-' : (x.isaDev > 0 ? '+' : '') + x.isaDev))],
-          ['Fuel est. (lb)', ...rowsA.map((x) => x.fuelLb.toLocaleString('en-US'))],
+          ['Trip fuel (lb)', ...rowsA.map((x) => x.fuelLb.toLocaleString('en-US'))],
           ['Advisories', ...rowsA.map((x) => (x.hits.length ? String(x.hits.length) : '-'))],
         ],
         styles: { fontSize: 6.6 * k, cellPadding: 1.8 * k, halign: 'center', lineColor: C.line, lineWidth: 0.4 },
@@ -275,7 +275,7 @@
         table({
           head: [['Item', 'lb', 'Basis']],
           body: [...f.lines.map((l) => [l.label + (l.advisory ? ' (advised)' : ''), n(l.lb), l.why]), ['Minimum', n(f.minimumLb), 'Taxi, trip, required alternate and reserve'],
-            ...f.extras.map((l) => [l.label + ' (contingency)', n(l.lb), l.why]), ['Recommended block fuel', n(f.recommendedLb), f.plannedLb != null ? `Planned ${n(f.plannedLb)} lb: ${f.marginLb >= 0 ? n(f.marginLb) + ' lb to spare' : n(-f.marginLb) + ' lb more recommended'}; landing fuel as planned ${n(f.landingLb)} lb` : 'Rough estimate']].map((r) => r.map(t)),
+            ...f.extras.map((l) => [l.label + ' (contingency)', n(l.lb), l.why]), ['Recommended block fuel', n(f.recommendedLb), f.plannedLb != null ? `Planned ${n(f.plannedLb)} lb: ${f.marginLb >= 0 ? n(f.marginLb) + ' lb to spare' : n(-f.marginLb) + ' lb more recommended'}; landing fuel as planned ${n(f.landingLb)} lb` : 'From the XLS+ Flight Planning Guide at ISA']].map((r) => r.map(t)),
           columnStyles: { 0: { cellWidth: 130, fontStyle: 'bold' }, 1: { cellWidth: 44, halign: 'right' } },
           didParseCell: (h) => { if (h.section === 'body' && /^(Minimum|Recommended)/.test(String(h.row.raw[0]))) { h.cell.styles.fillColor = [238, 244, 253]; h.cell.styles.fontStyle = 'bold'; } },
         });

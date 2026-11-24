@@ -246,7 +246,7 @@ test('fuel recommendation from a ForeFlight fuel plan and the forecast', () => {
   assert.strictEqual(ok.landingLb, 2142);
   // an alternate becomes required and the destination is IFR: more than planned is needed
   const need = recommend({ ...base, alternate: { id: 'KCCC', filed: true, required: true, distNm: 120 }, flags: { hold: 'KBBB is forecast IFR at ETA' } });
-  assert.ok(need.lines.find((l) => l.key === 'alternate').lb > 800);
+  assert.ok(need.lines.find((l) => l.key === 'alternate').lb > 450);
   assert.strictEqual(need.level, 'nogo');
   assert.match(need.notes.join(' '), /no alternate fuel/);
   // stronger headwind than planned adds trip fuel
@@ -255,5 +255,12 @@ test('fuel recommendation from a ForeFlight fuel plan and the forecast', () => {
   // without a briefing the figures are estimates
   const est = recommend({ rules: '135', distNm: 900, eteMin: 170, cruiseFlow: 1400, estTripLb: 3950 });
   assert.strictEqual(est.plannedLb, null);
-  assert.match(est.text, /rough estimates/);
+  assert.match(est.text, /Flight Planning Guide/);
+  assert.ok(est.lines.find((l) => l.key === 'reserve').lb >= 767);
+  const perf = require('../engine/lib/perf');
+  // the guide's mission table: 900 nm at 35,000 ft is 2:10 and 3,385 lb including 135 lb taxi
+  const t = perf.trip({ distNm: 900, altFt: 35000, towLb: 18000 });
+  assert.ok(Math.abs(t.min - 130) <= 3 && Math.abs(t.lb + 135 - 3385) <= 110, `${t.min} min ${t.lb} lb`);
+  assert.strictEqual(Math.round(perf.cruise(41000, 18000).flow), 1267);
+  assert.strictEqual(Math.round(perf.holdFlow(15000, 10000)), 952);
 });
