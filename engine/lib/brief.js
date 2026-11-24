@@ -6,6 +6,7 @@ const wx = require('./wx');
 const fronts = require('./fronts');
 const dec = require('./decode');
 const { CE56X } = require('./aircraft');
+const collins = require('./collins');
 
 const fmtZ = (ms) => {
   const d = new Date(ms);
@@ -179,7 +180,7 @@ async function buildBriefing(plan, input) {
   const bbox = bboxOf(route, 1.5);
 
   // ---- parallel live fetches
-  const [metars, tafs, apts, pireps, sigmets, isigmets, gairmets, cwas, codsus, codsrp, wa, enrouteMetars, notams] = await Promise.all([
+  const [metars, tafs, apts, pireps, sigmets, isigmets, gairmets, cwas, codsus, codsrp, wa, enrouteMetars, notams, regionalMetars] = await Promise.all([
     wx.safe('METAR', () => wx.awc.metar(airports), errors),
     wx.safe('TAF', () => wx.awc.taf(airports), errors),
     wx.safe('Airport data', () => wx.awc.airport(airports), errors),
@@ -193,6 +194,7 @@ async function buildBriefing(plan, input) {
     wx.safe('Winds aloft (GFS via Open-Meteo)', () => wx.windsAloft(windPts, opts.cruiseAlt), errors),
     wx.safe('En-route METARs', () => wx.awc.metarBbox(bboxOf(route, 0.6)), errors),
     wx.safe('NOTAMs (FAA API)', () => wx.notams(airports), errors),
+    wx.safe('Regional METARs', () => wx.awc.metarBbox(bboxOf(route, 6)), errors),
   ]);
 
   // ---- winds model and timing
@@ -522,7 +524,19 @@ async function buildBriefing(plan, input) {
     const ref = new Date();
     const sections = [...fronts.parseCoded(codsus, ref), ...(codsrp ? fronts.parseCoded(codsrp, ref) : [])];
     surface = fronts.interpretRoute(sections, S, { corridorNm: 400 });
-    if (surface.available) surface.narrative = surfaceNarrative(surface, { S, dep, dest, prof, stations, opts });
+    if (surface.available) {
+      // Upper-air summary at each winds point (850/700/500 mb), used for Collins' upper-support and stability checks
+      const upper = wm ? windPts.map((p, i) => {
+        const smp = S.reduce((a, b) => (Math.abs(b.s - p.s) < Math.abs(a.s - p.s) ? b : a));
+        const g = (k) => wm.at(i, smp.t, k);
+        return { lat: p.lat, lon: p.lon, s: p.s, d500: g('wind_direction_500hPa'), s500: g('wind_speed_500hPa'), t500: g('temperature_500hPa'), d700: g('wind_direction_700hPa'), s700: g('wind_speed_700hPa'), d850: g('wind_direction_850hPa'), s850: g('wind_speed_850hPa'), t850: g('temperature_850hPa') };
+      }) : [];
+      const c = collins.analyze(surface, { S, dep, dest, prof, stations, opts, upper, regional: regionalMetars || enrouteMetars || [] });
+      surface.method = 'Richard L. Collins, Flying the Weather Map';
+      surface.narrative = c.paras;
+      surface.collins = c.summary;
+      for (const f of c.factors) add(f.level, f.category, f.title, f.detail, f.where);
+    }
     for (const f of surface.fronts || []) {
       if (!f.crossesRoute) continue;
       const when = f.encounter.time ? fmtZ(Date.parse(f.encounter.time)) : '?';
@@ -629,64 +643,6 @@ function decide(factors, errors, { dep, dest, opts, etaMs }) {
   return { verdict, headline, reasoning, counts: { nogo: nogo.length, caution: caution.length } };
 }
 
-function surfaceNarrative(sf, { S, dep, dest, prof, stations, opts }) {
-  const paras = [];
-  const aValid = sf.analysisValid ? fmtZ(Date.parse(sf.analysisValid)) : 'latest';
-  const depSt = stations.find((s) => s.role === 'departure');
-  const destSt = stations.find((s) => s.role === 'destination');
-  // Pressure systems
-  const highs = sf.centers.filter((c) => c.kind === 'H'), lows = sf.centers.filter((c) => c.kind === 'L');
-  const sys = [];
-  for (const c of [...lows.slice(0, 3), ...highs.slice(0, 3)]) {
-    const mv = c.motion ? ` It is forecast to move ${c.motion.towardCompass} at ~${c.motion.speedKt} kt and ${c.motion.pressureTrend > 0 ? 'fill/weaken' : c.motion.pressureTrend < 0 ? 'deepen' : 'hold steady'} (${c.motion.pressureTrend > 0 ? '+' : ''}${c.motion.pressureTrend} mb in ${Math.round(c.motion.hours)} h)${c.kind === 'H' && c.motion.pressureTrend < 0 ? ', i.e. the high is weakening' : c.kind === 'H' && c.motion.pressureTrend > 0 ? ', i.e. the high is strengthening' : ''}.` : '';
-    sys.push(c.kind === 'L'
-      ? `A ${c.pressure} mb low lies ${c.distNm} nm ${c.bearingFromRoute} of the route (abeam ~${c.alongRouteNm} nm). Around a low the flow is counterclockwise and converging, so air is lifted: expect more cloud, lower ceilings and precipitation the closer the route passes, with the worst weather usually north and east of the center and along its fronts.${mv}`
-      : `A ${c.pressure} mb high lies ${c.distNm} nm ${c.bearingFromRoute} of the route (abeam ~${c.alongRouteNm} nm). Highs bring sinking, diverging air and generally good flying weather, but the subsidence inversion can trap haze, smoke and low stratus or fog overnight, and light winds near the center favor radiation fog.${mv}`);
-  }
-  paras.push({ heading: 'Synoptic overview', text: `WPC surface analysis valid ${aValid}. ${sys.length ? sys.join(' ') : 'No significant pressure centers within 600 nm of the route.'}` });
-
-  // Fronts
-  const relevantFr = sf.fronts.filter((f) => f.crossesRoute || f.depPassage || f.destPassage || f.encounter.distNm <= 150).slice(0, 5);
-  const distantFr = sf.fronts.filter((f) => !relevantFr.includes(f));
-  if (!sf.fronts.length) paras.push({ heading: 'Fronts', text: 'No fronts or troughs are analysed within 400 nm of the route. Weather will be driven by the air mass itself (stability, moisture) rather than frontal lift; check the terminal forecasts and convective outlooks for air-mass storms.' });
-  const motionTxt = (f) => (!f.motion ? 'Its movement could not be matched on the 12-hour prog, so treat it as slow-moving or changing character.' : f.motion.speedKt < 5 ? 'Comparing the analysis with the 12-hour prog, it is nearly stationary.' : `Comparing the analysis with the 12-hour prog, it is moving toward the ${f.motion.towardCompass} at about ${f.motion.speedKt} kt${f.motion.becomes ? ` and is forecast to become a ${fronts.FRONT_NAMES[f.motion.becomes] || f.motion.becomes}` : ''}.`);
-  for (const f of relevantFr) {
-    const mv = motionTxt(f);
-    const speedNote = f.type === 'COLD' && f.motion && f.motion.speedKt >= 5 ? (f.motion.speedKt >= 25 ? ' That is a fast cold front: expect a sharper, more convective band with gusty winds, and possible prefrontal squall lines.' : ' That is a slow cold front: the cloud and precipitation band tends to be wider and more stratiform, with longer-lasting IFR along it.') : '';
-    const timing = f.crossesRoute
-      ? `Projecting that motion to your flight times, the route meets the front about ${f.encounter.alongRouteNm} nm from ${dep.id} around ${fmtZ(Date.parse(f.encounter.time))}.`
-      : `Projected to your flight times, it stays at least ${f.encounter.distNm} nm from the route (closest near ${f.encounter.alongRouteNm} nm).`;
-    const pass = [f.depPassage ? `It reaches ${dep.id} around ${fmtZ(Date.parse(f.depPassage))} (ETD ${fmtZ(opts.etd)}).` : '', f.destPassage ? `It reaches ${dest.id} around ${fmtZ(Date.parse(f.destPassage))} (ETA ${fmtZ(prof.eta)}).` : ''].filter(Boolean).join(' ');
-    const coldSfc = [depSt, destSt].some((s) => s && s.metar && s.metar.temp != null && s.metar.temp <= 3);
-    const icingCue = (f.type === 'WARM' || f.type === 'STNRY' || f.type === 'OCFNT') && coldSfc ? ' Surface temperatures near freezing at a terminal raise the risk of freezing rain or ice pellets on the cold side of this boundary; review the freezing level and any icing PIREPs.' : '';
-    paras.push({ heading: `${cap(f.name)}${f.strength ? ` (${f.strength})` : ''}: ${f.crossesRoute ? 'crosses route' : f.encounter.distNm + ' nm from route'}`, text: `Currently ${f.nearestNowNm} nm from the route at its closest (near ${f.nearestNowAtNm} nm along). ${mv}${speedNote} ${timing} ${pass} ${f.expectedWeather}${icingCue}` });
-  }
-  if (distantFr.length) paras.push({ heading: 'Other boundaries within 400 nm', text: distantFr.map((f) => `${cap(f.name)} ${f.nearestNowNm} nm from the route${f.motion && f.motion.speedKt >= 5 ? `, moving ${f.motion.towardCompass} at ${f.motion.speedKt} kt` : ', nearly stationary'}, projected to stay ${f.encounter.distNm}+ nm away.`).join(' ') + ' These should not directly affect the flight, but watch them if the departure slips or you divert toward them.' });
-
-  // Terminal air-mass read
-  const terms = [];
-  for (const st of [depSt, destSt]) {
-    if (!st || !st.metar) continue;
-    const m = st.metar;
-    const spread = m.temp != null && m.dewp != null ? Math.round(m.temp - m.dewp) : null;
-    let t = `${st.id} (${st.role}) currently ${m.category}: wind ${m.wind.vrb ? 'variable' : m.wind.dir != null ? String(m.wind.dir).padStart(3, '0') + '°' : 'calm'} at ${m.wind.spd} kt${m.wind.gst ? ' gusting ' + m.wind.gst : ''}, temperature ${m.temp}°C, dew point ${m.dewp}°C.`;
-    if (spread != null && spread <= 3) t += ` The ${spread}°C spread means the air is near saturation; fog or low stratus can form quickly, especially after sunset or with light winds.`;
-    if (m.wind.dir != null && m.wind.dir >= 270 || (m.wind.dir != null && m.wind.dir <= 20)) t += ' Northwest-to-north flow typically indicates the cold, post-frontal (or high-pressure) side.';
-    else if (m.wind.dir != null && m.wind.dir >= 140 && m.wind.dir <= 230) t += ' Southerly flow typically indicates the warm sector ahead of a cold front, with more moisture and instability.';
-    terms.push(t);
-  }
-  if (terms.length) paras.push({ heading: 'Terminal air masses', text: terms.join(' ') });
-
-  // Bottom line
-  const crossing = sf.fronts.filter((f) => f.crossesRoute);
-  const destPass = sf.fronts.filter((f) => f.destPassage);
-  let bl;
-  if (!crossing.length && !destPass.length) bl = `The surface pattern is benign for this flight: no frontal boundary is projected to cross the route or reach ${dest.id} during the flight window. The main surface-analysis risks are air-mass effects near the terminals.`;
-  else bl = `The surface chart's main message for this flight: ${crossing.map((f) => `the ${f.name} crossing at ~${f.encounter.alongRouteNm} nm`).concat(destPass.map((f) => `the ${f.name} reaching ${dest.id}`)).join(', ')}. At FL${Math.round(opts.cruiseAlt / 100)} you will be above most frontal stratus, so the critical phases are the climb out of ${dep.id} and the descent into ${dest.id}: make sure the terminal TAF timing agrees with the front's projected arrival, and plan the alternate on the far side of the front from the weather.`;
-  paras.push({ heading: 'What it means for this flight', text: bl });
-  return paras;
-}
-
 function sourceList(errors) {
   const failed = new Set(errors.map((e) => e.source));
   return [
@@ -701,6 +657,7 @@ function sourceList(errors) {
     ['WPC surface progs (CODSRP)', 'NWS WPC 12/24 h coded surface progs'],
     ['Winds aloft (GFS via Open-Meteo)', 'NOAA GFS via Open-Meteo (AWC FB tables were retired in 2026)'],
     ['En-route METARs', 'aviationweather.gov Data API'],
+    ['Regional METARs', 'aviationweather.gov Data API (for Collins-method contrast, moisture and upstream checks)'],
     ['NOTAMs (FAA API)', 'FAA NOTAM API (optional credentials)'],
   ].map(([name, desc]) => ({ name, desc, ok: !failed.has(name) }));
 }

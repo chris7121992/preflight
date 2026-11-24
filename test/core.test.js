@@ -75,3 +75,13 @@ test('crosswind picks best runway', () => {
   assert.strictEqual(r.id, '01');
   assert.ok(r.crossG >= 15 && r.crossG <= 17, `gust crosswind ${r.crossG}`);
 });
+
+test('Collins position relative to a low', () => {
+  const { sectorOf, sideOf } = require('../engine/lib/collins');
+  assert.strictEqual(sectorOf(60).key, 'ahead');   // northeast of the low
+  assert.strictEqual(sectorOf(160).key, 'warm');   // south-southeast: warm sector
+  assert.strictEqual(sectorOf(250).key, 'behind'); // west-southwest: low has passed
+  assert.strictEqual(sectorOf(0).key, 'north');    // low passing to the south
+  const line = [{ lat: 40, lon: -90 }, { lat: 40, lon: -80 }];
+  assert.notStrictEqual(sideOf({ lat: 42, lon: -85 }, line), sideOf({ lat: 38, lon: -85 }, line));
+});
