@@ -8,6 +8,7 @@ const dec = require('./decode');
 const { CE56X } = require('./aircraft');
 const sfcread = require('./sfcread');
 const simradar = require('./simradar');
+const fuelLib = require('./fuel');
 const nwp = require('./nwp');
 const routing = require('./routing');
 const minimums = require('./minimums');
@@ -204,6 +205,7 @@ async function buildBriefing(plan, input) {
     altGps: !!input.altGps,
     highMinsPic: !!input.highMinsPic,
     notamText: typeof input.notamText === 'string' ? input.notamText.slice(0, 2e6) : '',
+    ffFuel: input.ffFuel && typeof input.ffFuel === 'object' ? Object.fromEntries(Object.entries(input.ffFuel).filter(([, v]) => typeof v === 'number' && isFinite(v))) : null,
   };
   if (opts.highMinsPic) { opts.minCeiling += 100; opts.minVis += 0.5; }
   if (!isFinite(opts.etd)) opts.etd = Date.now() + 3600e3;
@@ -814,6 +816,27 @@ async function buildBriefing(plan, input) {
     }
   }
 
+  // ---- fuel recommendation
+  let fuel = null;
+  {
+    const destSt = stations.find((x) => x.role === 'destination');
+    const plannedRow = altOpts.rows.find((r) => r.fl === Math.round(opts.cruiseAlt / 1000) * 10) || altOpts.rows[altOpts.rows.length - 1];
+    const bad = (cat) => factors.filter((f) => f.category === cat && (f.level === 'caution' || f.level === 'nogo'));
+    const conv = bad('Convection'), ice = bad('Icing');
+    const jc = destSt && destSt.judged ? destSt.judged.category : null;
+    const closedRw = destSt && destSt.notams ? destSt.notams.closedRunways : [];
+    const holdWhy = jc === 'IFR' || jc === 'LIFR' ? `${dest.id} is forecast ${jc} at ETA` : destSt && destSt.alternateRequired ? `${dest.id} is forecast below the alternate-required weather` : closedRw.length ? `${dest.id} has runway ${closedRw.join(', ')} closed, so expect arrival delays` : null;
+    const ff = opts.ffFuel && opts.ffFuel.flight ? opts.ffFuel : null;
+    fuel = fuelLib.recommend({
+      rules: opts.rules, distNm: ff && ff.distNm ? ff.distNm : Math.round(prof.totalNm), eteMin: Math.round((etaMs - opts.etd) / 60e3),
+      cruiseFlow: plannedRow ? Math.round((plannedRow.fuelLb / plannedRow.eteMin) * 60) : null, estTripLb: plannedRow ? plannedRow.fuelLb : null,
+      windHeadKt: avgComp != null ? -avgComp : null, ff,
+      alternate: { id: opts.alternate || null, filed: !!opts.alternate, required: !!(destSt && destSt.alternateRequired), advised: !!(destSt && destSt.alternateAdvised), distNm: opts.alternate && altLeg ? altLeg : null },
+      flags: { convection: conv.length ? conv[0].title : null, hold: holdWhy, holdMin: jc === 'LIFR' ? 30 : 20, icing: ice.length ? ice[0].title : null },
+    });
+    add(fuel.level, 'Fuel/Range', fuel.level === 'nogo' ? 'Planned fuel is below the minimum' : fuel.level === 'caution' ? 'Fuel: more than planned is recommended' : 'Fuel recommendation', `${fuel.text} ${fuel.notes.join(' ')} Based on: ${fuel.basis}.`, 'fuel');
+  }
+
   // Data age (snapshot mode on the free Firebase plan)
   let dataAsOf = null;
   const meta = await wx.snapMeta().catch(() => null);
@@ -845,6 +868,7 @@ async function buildBriefing(plan, input) {
     surface,
     models,
     simRadar,
+    fuel,
     routing: { route: routeOpts, altitude: altOpts, procedures: procs },
     charts: wx.wpc.charts(),
     notams: notamInfo,

@@ -11,14 +11,52 @@
     return new Promise((res, rej) => { const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error('Could not load the PDF reader')); document.head.appendChild(s); });
   }
 
+  // Taxi diagrams in a ForeFlight briefing: a page with little text (airport ids and names) over pictures.
+  // The page is drawn and the picture under each airport id is cut out. Kept in memory only.
+  let charts = {};
+  async function taxiDiagrams(page, tc) {
+    const items = tc.items.filter((it) => it.str && it.str.trim());
+    const heads = items.filter((it) => /^[A-Z][A-Z0-9]{3}$/.test(it.str.trim()));
+    if (!heads.length || items.length > 6 * heads.length + 4 || items.reduce((a, it) => a + it.str.length, 0) > 400) return;
+    const ops = await page.getOperatorList(), O = window.pdfjsLib.OPS;
+    if (!ops.fnArray.some((f) => f === O.paintImageXObject || f === O.paintJpegXObject || f === O.paintInlineImageXObject)) return;
+    const scale = 2.2, vp = page.getViewport({ scale });
+    const cv = document.createElement('canvas'); cv.width = Math.ceil(vp.width); cv.height = Math.ceil(vp.height);
+    const g = cv.getContext('2d', { willReadFrequently: true });
+    g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+    await page.render({ canvasContext: g, viewport: vp }).promise;
+    const hs = heads.map((it) => { const [x, y] = vp.convertToViewportPoint(it.transform[4], it.transform[5]); return { id: it.str.trim(), x, y }; });
+    for (const h of hs) {
+      const row = hs.filter((o) => Math.abs(o.y - h.y) < 6).sort((a, b) => a.x - b.x), below = hs.filter((o) => o.y > h.y + 40).sort((a, b) => a.y - b.y)[0];
+      const next = row[row.indexOf(h) + 1];
+      const x0 = Math.max(0, Math.floor(h.x - 4)), x1 = Math.min(cv.width, Math.floor(next ? next.x - 8 : cv.width)), y0 = Math.floor(h.y + 16 * scale), y1 = Math.min(cv.height - Math.floor(24 * scale), Math.floor(below ? below.y - 14 * scale : cv.height));
+      if (x1 - x0 < 80 || y1 - y0 < 80) continue;
+      const d = g.getImageData(x0, y0, x1 - x0, y1 - y0), w = d.width, hgt = d.height;
+      const rowsN = new Uint32Array(hgt), colsN = new Uint32Array(w);
+      for (let y = 0; y < hgt; y++) for (let x = 0; x < w; x++) { const k = (y * w + x) * 4; if (d.data[k] < 238 || d.data[k + 1] < 238 || d.data[k + 2] < 238) { rowsN[y]++; colsN[x]++; } }
+      // rules across the page and between the columns are not part of the picture
+      const rowOk = (y) => rowsN[y] > 0 && rowsN[y] < w * 0.8, colOk = (x) => colsN[x] > 0 && colsN[x] < hgt * 0.8;
+      let t = 0, bt = hgt - 1, l = 0, r = w - 1;
+      while (t < hgt && !rowOk(t)) t++; while (bt > t && !rowOk(bt)) bt--; while (l < w && !colOk(l)) l++; while (r > l && !colOk(r)) r--;
+      if (bt - t < 80 || r - l < 80) continue;
+      const pad = 8, cx = Math.max(0, l - pad), cy = Math.max(0, t - pad), cw = Math.min(w, r + pad) - cx, ch = Math.min(hgt, bt + pad) - cy;
+      const out = document.createElement('canvas'); out.width = cw; out.height = ch;
+      out.getContext('2d').drawImage(cv, x0 + cx, y0 + cy, cw, ch, 0, 0, cw, ch);
+      charts[h.id] = { data: out.toDataURL('image/jpeg', 0.85), w: cw, h: ch };
+    }
+  }
+  const chartFor = (a) => { const id = [a.id, ...(a.ids || [])].find((x) => charts[x]); return id ? charts[id] : null; };
+
   // Text of a PDF with its line breaks rebuilt from the position of each text run
   async function readPdf(file) {
     if (!window.pdfjsLib) { await loadScript(PDFJS + 'pdf.min.js'); window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.js'; }
     const doc = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
     const pages = [];
+    charts = {};
     for (let i = 1; i <= doc.numPages; i++) {
       const page = await doc.getPage(i);
       const tc = await page.getTextContent();
+      try { await taxiDiagrams(page, tc); } catch (e) { /* no diagrams from this page */ }
       const rows = [];
       for (const it of tc.items) {
         if (!it.str || !it.str.trim()) continue;
@@ -277,7 +315,7 @@
     return withNotams.filter((a) => a.lat != null).map((a) => {
       const list = n.byAirport[a.id];
       const navs = list.filter((x) => x.active && x.nav).map((x) => x.nav.aid + (x.nav.rwy ? ' ' + x.nav.rwy : ''));
-      try { return { id: a.id, name: a.name, role: a.role, navs: [...new Set(navs)], ...model(a, list) }; } catch (e) { return null; }
+      try { return { id: a.id, name: a.name, role: a.role, navs: [...new Set(navs)], chart: chartFor(a), ...model(a, list) }; } catch (e) { return null; }
     }).filter(Boolean);
   }
 
@@ -306,7 +344,9 @@
         const ct = [...new Set(act.flatMap((x) => (x.items || []).filter((it) => it.kind !== 'RWY' && (it.status === 'closed' || it.status === 'restricted')).map((it) => it.name)))];
         return `<div class="adbox" data-i="${i}"><h3>${esc(a.id)} <span class="muted">${esc(a.name)} · ${esc(a.role)}</span></h3>
           <p>${list.length ? `${cr.length ? `<span class="pill nogo">RWY ${esc(cr.join(', '))} closed</span> ` : '<span class="pill ok">No runway closed</span> '}${ct.length ? `<span class="pill caution">${ct.length} taxiway/apron closure${ct.length > 1 ? 's' : ''}</span>` : ''}` : 'No NOTAMs for this airport were found in the text.'}</p>
-          ${list.length ? '<div class="admap"></div><p class="hint adnote"></p>' : ''}${list.length ? listHtml(list) : ''}</div>`;
+          ${list.length ? '<div class="admap"></div><p class="hint adnote"></p>' : ''}
+          ${chartFor(a) ? `<details class="adchart"${cached(a.id) ? '' : ' open'}><summary>Taxi diagram from your ForeFlight briefing</summary><img src="${chartFor(a).data}" alt="${esc(a.id)} taxi diagram from the briefing"><p class="hint">As printed in the briefing. Closures are listed below, not drawn on this picture.</p></details>` : ''}
+          ${list.length ? listHtml(list) : ''}</div>`;
       }).join('');
     const draw = () => n.airports.forEach((a, i) => {
       const box = el.querySelector(`.adbox[data-i="${i}"]`), list = n.byAirport[a.id] || [];
@@ -322,5 +362,5 @@
     if (pending) loadGeometry(withNotams, (left) => { if (el.isConnected) { setLoading(left); draw(); } }).finally(() => { if (!el.isConnected) return; el.querySelectorAll('.adbox').forEach((bx) => delete bx.dataset.loading); draw(); });
   }
 
-  window.NotamGuide = { readPdf, render, diagrams };
+  window.NotamGuide = { readPdf, render, diagrams, charts: () => charts };
 })();

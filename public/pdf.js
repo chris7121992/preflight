@@ -71,7 +71,7 @@
 
     // ------------------------------------------------------------------ page 1
     const radar = (extra && extra.radar) || { list: [] }, sr = b.simRadar;
-    const pages = radar.list.length || (sr && sr.available) ? 3 : 2;
+    const pages = radar.list.length || (sr && sr.available) || b.fuel ? 3 : 2;
     header(`page 1 of ${pages}`);
     y = 62;
     const vcol = d.verdict === 'GO' ? C.go : d.verdict === 'NO-GO' ? C.nogo : C.caution;
@@ -101,6 +101,7 @@
       ['Avg wind component', `${r.avgWindComponentKt != null ? (r.avgWindComponentKt > 0 ? '+' : '') + r.avgWindComponentKt + ' kt' : '-'}`],
       ['ESAD (route + alt)', `${r.equivalentStillAirNm ?? '-'} nm of ~${r.stillAirRangeNm ?? '-'} nm`],
       [`Alternate (${dest && dest.altTest ? dest.altTest.rule : p.rules === '135' ? '135.223' : '91.169'})`, dest ? (dest.alternateRequired ? 'REQUIRED' : dest.alternateAdvised ? 'advised by models' : 'not required') + (dest.altTest ? ` (needs ${dest.altTest.ceilNeed} ft / ${dest.altTest.visNeed} SM)` : '') : '-'],
+      ['Fuel', b.fuel ? `recommend ${b.fuel.recommendedLb.toLocaleString('en-US')} lb${b.fuel.plannedLb != null ? ` (planned ${b.fuel.plannedLb.toLocaleString('en-US')})` : ' (estimate)'}` : '-'],
       ['Best altitude (wx/wind/fuel)', alt ? `FL${alt.best}` : '-'],
       ['Route option', rec ? (rec.keepFiled ? 'Keep filed route' : clip(rec.best.name, 60)) : '-'],
       ['Flow aloft', b.surface && b.surface.reading ? `${({ sw: 'SW - supports lows', nw: 'NW - clearing', w: 'flat W - little support' })[b.surface.reading.flow] || '-'}${b.surface.reading.lapse != null ? `; lapse ${b.surface.reading.lapse} C/1000 ft` : ''}` : '-'],
@@ -171,7 +172,14 @@
         const y0 = y; let yMax = y;
         diagrams.slice(0, n).forEach((d, i) => {
           const x = M + i * (dw + gap);
-          drawAirport(doc, d, x, y0, dw, dh, k);
+          const useChart = !d.osm && d.chart;
+          if (useChart) {
+            const sc = Math.min((dw - 4) / d.chart.w, (dh - 4) / d.chart.h), iw = d.chart.w * sc, ih = d.chart.h * sc;
+            doc.setFillColor(255, 255, 255); doc.rect(x, y0, dw, dh, 'F');
+            try { doc.addImage(d.chart.data, 'JPEG', x + (dw - iw) / 2, y0 + (dh - ih) / 2, iw, ih); } catch (e) { /* fall back to the sketch below */ }
+            doc.setDrawColor(...C.line); doc.setLineWidth(0.6); doc.rect(x, y0, dw, dh);
+            doc.setFont('helvetica', 'bold'); doc.setFontSize(7 * k); doc.setTextColor(...C.ink); doc.text(t(`${d.id}  ${d.role || ''}`), x + 4, y0 + 9 * k);
+          } else drawAirport(doc, d, x, y0, dw, dh, k);
           let yy = y0 + dh + 8 * k;
           const act = d.shown;
           const uniq = (a) => [...new Set(a)];
@@ -187,7 +195,7 @@
             pt.length ? [`TWY partly closed: ${pt.join(', ')}`, C.nogo] : null,
             wt.length ? [`TWY work in progress: ${wt.join(', ')}`, C.caution] : null,
             d.navs.length ? [`Out of service: ${d.navs.join(', ')}`, C.caution] : null,
-            d.osm ? null : ['Runways only: no taxiway layout on file', C.muted],
+            d.osm ? null : useChart ? ['Taxi diagram from your ForeFlight briefing; closures are listed, not drawn', C.muted] : ['Runways only: no taxiway layout on file', C.muted],
           ].filter(Boolean);
           for (const [txt, col, bold] of lines) {
             doc.setFont('helvetica', bold ? 'bold' : 'normal'); fs(6.4); doc.setTextColor(...col);
@@ -260,24 +268,39 @@
     // ------------------------------------------------------------------ page 3: simulated radar
     if (pages === 3) {
       doc.addPage(); header('page 3 of 3'); y = 64;
+      if (b.fuel) {
+        const f = b.fuel, n = (x) => (x == null ? '-' : x.toLocaleString('en-US'));
+        section('Fuel recommendation');
+        para(f.text, { size: 7.8, bold: true, gap: 4, color: f.level === 'nogo' ? C.nogo : f.level === 'caution' ? C.caution : C.ink });
+        table({
+          head: [['Item', 'lb', 'Basis']],
+          body: [...f.lines.map((l) => [l.label + (l.advisory ? ' (advised)' : ''), n(l.lb), l.why]), ['Minimum', n(f.minimumLb), 'Taxi, trip, required alternate and reserve'],
+            ...f.extras.map((l) => [l.label + ' (contingency)', n(l.lb), l.why]), ['Recommended block fuel', n(f.recommendedLb), f.plannedLb != null ? `Planned ${n(f.plannedLb)} lb: ${f.marginLb >= 0 ? n(f.marginLb) + ' lb to spare' : n(-f.marginLb) + ' lb more recommended'}; landing fuel as planned ${n(f.landingLb)} lb` : 'Rough estimate']].map((r) => r.map(t)),
+          columnStyles: { 0: { cellWidth: 130, fontStyle: 'bold' }, 1: { cellWidth: 44, halign: 'right' } },
+          didParseCell: (h) => { if (h.section === 'body' && /^(Minimum|Recommended)/.test(String(h.row.raw[0]))) { h.cell.styles.fillColor = [238, 244, 253]; h.cell.styles.fontStyle = 'bold'; } },
+        });
+        para(`${f.notes.join(' ')} Based on: ${f.basis}. Limits used: ${n(f.limits.usableFuelLb)} lb usable fuel, ${n(f.limits.maxTakeoffLb)} lb maximum takeoff, ${n(f.limits.maxLandingLb)} lb maximum landing. The AFM, weight and balance and OpSpecs govern.`, { size: 6.4, color: C.muted, gap: 4 });
+      }
+      if (radar.list.length || (sr && sr.available)) {
       section('Simulated radar for the flight (model forecast, not observed radar)');
       if (radar.list.length) {
-        const gap = 10, pw = (W - 2 * M - gap) / 2, ph = pw * (540 / 828);
+        const three = !!b.fuel, gap = 8, pw = three ? (W - 2 * M - gap * 2) / 3 : (W - 2 * M - gap) / 2, ph = pw * (540 / 828);
         radar.list.slice(0, 3).forEach((pn, i) => {
-          const x = M + (i % 2) * (pw + gap), yy = y + Math.floor(i / 2) * (ph + 16);
+          const x = three ? M + i * (pw + gap) : M + (i % 2) * (pw + gap), yy = three ? y : y + Math.floor(i / 2) * (ph + 16);
           try { doc.addImage(pn.data, 'JPEG', x, yy, pw, ph); } catch (e) { /* skip panel */ }
           doc.setDrawColor(...C.line); doc.setLineWidth(0.6); doc.rect(x, yy, pw, ph);
-          doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(...C.ink); doc.text(t(pn.label), x, yy + ph + 9);
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(three ? 6.2 : 7); doc.setTextColor(...C.ink); doc.text(t(pn.label), x, yy + ph + 9);
         });
         // legend and notes beside the last panel
         const lx = M + pw + gap + 6, ly = y + ph + 16 + 8;
-        if (radar.list.length === 3) {
+        if (radar.list.length === 3 && !three) {
           doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...C.ink);
           doc.text(doc.splitTextToSize(t(`HRRR simulated reflectivity from the ${z(new Date(radar.init).toISOString())} run, shown for the time the aircraft (blue dot) is at each position. Black line: filed route. HRRR covers the continental US and nearby waters; outside it the map is blank and the strip below applies. Tiles: Iowa Environmental Mesonet; base map: Esri.`), pw - 12), lx, ly);
           doc.text(doc.splitTextToSize(t('This is a model forecast of radar echoes. Storms rarely form exactly where and when a model puts them: read it for the pattern (lines, coverage, timing) and use live radar on the day.'), pw - 12), lx, ly + 58);
         }
-        y += Math.ceil(Math.min(3, radar.list.length) / 2) * (ph + 16) + 4;
-        if (radar.list.length !== 3) para(`HRRR simulated reflectivity from the ${z(new Date(radar.init).toISOString())} run, shown for the time the aircraft (blue dot) is at each position. A model forecast, not observed radar.`, { size: 6.8, color: C.muted });
+        y += (three ? 1 : Math.ceil(Math.min(3, radar.list.length) / 2)) * (ph + 16) + 4;
+        if (three) para(`HRRR simulated reflectivity from the ${z(new Date(radar.init).toISOString())} run, shown for the time the aircraft (blue dot) is at each position. HRRR covers the continental US and nearby waters; outside it the map is blank and the strip below applies. A model forecast, not observed radar: read it for the pattern and use live radar on the day. Tiles: Iowa Environmental Mesonet; base map: Esri.`, { size: 6.4, color: C.muted });
+        else if (radar.list.length !== 3) para(`HRRR simulated reflectivity from the ${z(new Date(radar.init).toISOString())} run, shown for the time the aircraft (blue dot) is at each position. A model forecast, not observed radar.`, { size: 6.8, color: C.muted });
       } else {
         para(radar.init ? `The HRRR simulated radar map reaches 18 hours past its latest run (to ${z(new Date(radar.init + 18 * 3600e3).toISOString())}). This flight is outside that, so the strip below, from the longer-range models, stands in for it.` : 'The HRRR simulated radar map could not be loaded, so only the route strip is shown.', { size: 7.2 });
       }
@@ -293,6 +316,7 @@
           didParseCell: (h) => { if (h.section !== 'body' || h.column.index === 0) return; const c = col(parseInt(h.cell.raw, 10)); if (c) { h.cell.styles.fillColor = c; h.cell.styles.fontStyle = 'bold'; h.cell.styles.textColor = parseInt(h.cell.raw, 10) >= 45 ? [255, 255, 255] : [17, 17, 17]; } },
         });
         para(`Scale: 15 light, 25 light to moderate, 35 moderate, 40 heavy, 45 very heavy, 50+ extreme. A dash means no echo; TS means the model has a thunderstorm there. ${sr.method}`, { size: 6.2, color: C.muted });
+      }
       }
       footer();
     }

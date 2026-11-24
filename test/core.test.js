@@ -232,3 +232,28 @@ test('simulated radar: reflectivity from model precipitation along the route', (
   assert.strictEqual(factors[0].level, 'caution');
   assert.match(factors[0].title, /heavy echoes on the route at 200 nm/);
 });
+
+test('fuel recommendation from a ForeFlight fuel plan and the forecast', () => {
+  const { recommend } = require('../engine/lib/fuel');
+  const { parseBriefing } = require('../engine/lib/ffbrief');
+  const b = parseBriefing(['KAAA — KBBB (Nov 24, 2026) in N1 as ABC1 (C56X - 560 Citation XLS+) IFR', 'ETE Distance Avg Wind ETD ETA TOW ELW', '2h58m 933NM 72kt head (284°/109) 16:45 CST / 2245Z 18:43 MST / 0143Z 19800 lbs 15687 lbs', 'Block Fuel Taxi Fuel Flight Fuel Reserve Fuel Alternate Fuel Extra Fuel Landing Fuel', '6255 lbs 200 lbs 4113 lbs 1750 lbs 0 lbs 392 lbs 2142 lbs'].join('\n'));
+  assert.deepStrictEqual({ block: b.fuel.block, flight: b.fuel.flight, reserve: b.fuel.reserve, tow: b.fuel.tow, eteMin: b.fuel.eteMin, headKt: b.fuel.headKt, distNm: b.fuel.distNm }, { block: 6255, flight: 4113, reserve: 1750, tow: 19800, eteMin: 178, headKt: 72, distNm: 933 });
+  const base = { rules: '91', distNm: 933, eteMin: 178, windHeadKt: 72, ff: b.fuel };
+  const ok = recommend({ ...base });
+  assert.strictEqual(ok.minimumLb, 4113 + 1750);
+  assert.strictEqual(ok.level, 'info');
+  assert.strictEqual(ok.marginLb, 392);
+  assert.strictEqual(ok.landingLb, 2142);
+  // an alternate becomes required and the destination is IFR: more than planned is needed
+  const need = recommend({ ...base, alternate: { id: 'KCCC', filed: true, required: true, distNm: 120 }, flags: { hold: 'KBBB is forecast IFR at ETA' } });
+  assert.ok(need.lines.find((l) => l.key === 'alternate').lb > 800);
+  assert.strictEqual(need.level, 'nogo');
+  assert.match(need.notes.join(' '), /no alternate fuel/);
+  // stronger headwind than planned adds trip fuel
+  const wind = recommend({ ...base, windHeadKt: 102 });
+  assert.ok(wind.lines.find((l) => l.key === 'wind').lb > 300);
+  // without a briefing the figures are estimates
+  const est = recommend({ rules: '135', distNm: 900, eteMin: 170, cruiseFlow: 1400, estTripLb: 3950 });
+  assert.strictEqual(est.plannedLb, null);
+  assert.match(est.text, /rough estimates/);
+});

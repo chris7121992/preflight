@@ -209,3 +209,6 @@ h2.sub { margin-top: 18px; }
 .simmap { height: 430px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); margin: 0 0 6px; }
 .simstrip th, .simstrip td { text-align: center; min-width: 46px; } .simstrip td:first-child { text-align: left; }
 @media print { .simmap { height: 320px; } }
+
+.adchart { margin: 6px 0 10px; } .adchart summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.adchart img { display: block; max-width: min(100%, 560px); border: 1px solid var(--line); border-radius: 10px; background: #fff; margin-top: 8px; }

@@ -51,6 +51,23 @@ function parseBriefing(text) {
   // Alternate: a NOTAM/weather section headed "Alternate KXXX - Name", or "Alternate (KXXX)"
   const alt = lines.map((l) => /^(?:1st |First )?Alternate(?: Airport)?:? \(?([A-Z][A-Z0-9]{3})\)?(?: [-—]|$)/.exec(l)).find(Boolean);
   if (alt && alt[1] !== out.dest) out.alternate = alt[1];
+  // Fuel plan: a heading line of names with the figures on the next line
+  const fi = lines.findIndex((l) => /Block Fuel.*Flight Fuel/.test(l));
+  if (fi >= 0 && lines[fi + 1]) {
+    const names = lines[fi].match(/(Block|Taxi|Flight|Reserve|Alternate|Extra|Landing) Fuel/g) || [];
+    const nums = (lines[fi + 1].match(/\d[\d,]* ?lbs?/gi) || []).map((x) => parseInt(x.replace(/,/g, ''), 10));
+    if (names.length && nums.length === names.length) {
+      out.fuel = {};
+      names.forEach((n, i) => { out.fuel[n.split(' ')[0].toLowerCase()] = nums[i]; });
+      const wi = lines.findIndex((l) => /\bTOW\b.*\bELW\b/.test(l));
+      const w = wi >= 0 && lines[wi + 1] ? (lines[wi + 1].match(/\d[\d,]* ?lbs?/gi) || []).map((x) => parseInt(x.replace(/,/g, ''), 10)) : [];
+      if (w.length >= 2) { out.fuel.tow = w[w.length - 2]; out.fuel.elw = w[w.length - 1]; }
+      const sum = lines.slice(0, 12).join(' ');
+      const e = /\b(\d{1,2})h(\d{2})m\b/.exec(sum); if (e) out.fuel.eteMin = +e[1] * 60 + +e[2];
+      const wd = /\b(\d{1,3}) ?kt (head|tail)\b/i.exec(sum); if (wd) out.fuel.headKt = /head/i.test(wd[2]) ? +wd[1] : -wd[1];
+      const dn = /\b(\d{2,4}) ?NM\b/.exec(sum); if (dn) out.fuel.distNm = +dn[1];
+    }
+  }
   out.routeText = out.waypoints.join(' ');
   return out;
 }

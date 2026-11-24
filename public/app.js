@@ -29,7 +29,7 @@ function setFile(f) {
 $('file').addEventListener('change', (e) => setFile(e.target.files[0]));
 
 // NOTAMs: a ForeFlight briefing PDF (read in the browser, never uploaded) or pasted text
-let notamFromFile = '';
+let notamFromFile = '', briefingFlight = null;
 async function setNotamFile(f) {
   if (!f) return;
   const t = $('notamDropText');
@@ -40,6 +40,7 @@ async function setNotamFile(f) {
     notamFromFile = text;
     // A ForeFlight briefing also carries the flight itself: fill the form from it
     const fl = window.PreflightEngine.parseBriefing(text);
+    briefingFlight = fl;
     let flightNote = '';
     if (fl && fl.waypoints.length >= 2) {
       fileText = null; fileName = '';
@@ -106,6 +107,8 @@ $('planForm').addEventListener('submit', async (e) => {
   const etdLocal = $('etd').value;
   const body = {
     fileText, filename: fileName, routeText: fileText ? '' : routeText,
+    // the briefing's fuel plan applies only while the form still holds the briefing's flight
+    ffFuel: briefingFlight && briefingFlight.fuel && !fileText && routeText.trim().toUpperCase().startsWith(briefingFlight.dep) && routeText.trim().toUpperCase().endsWith(briefingFlight.dest) ? briefingFlight.fuel : null,
     alternate: $('alternate').value.trim(), cruiseAlt: $('cruiseAlt').value, tas: $('tas').value,
     etd: etdLocal ? new Date(etdLocal).toISOString() : null, rules: $('rules').value,
     destCircHaa: $('destCircHaa').value, destCircNa: $('destCircNa').checked, destHat: $('destHat').value, destVisMin: $('destVisMin').value,
@@ -148,6 +151,7 @@ function render(b) {
   renderTerminals(b);
   renderWinds(b);
   renderHazards(b);
+  renderFuel(b);
   try { window.SimRadar.render(b, $('simradar')); } catch (e) { $('simradar').textContent = 'Simulated radar could not be shown: ' + e.message; }
   renderPireps(b);
   renderEnroute(b);
@@ -270,6 +274,19 @@ function renderEnroute(b) {
   $('enroute').innerHTML = e.length
     ? `<div class="table-wrap"><table><tr><th>At</th><th>Cat</th><th>Observation</th></tr>${e.slice(0, 60).map((m) => `<tr><td class="num">${m.alongNm} nm</td><td><span class="pill ${m.cat}">${esc(m.cat)}</span></td><td><code>${esc(m.raw)}</code></td></tr>`).join('')}</table></div>`
     : '<p>No en-route METARs within 35 nm.</p>';
+}
+
+function renderFuel(b) {
+  const f = b.fuel;
+  if (!f) { $('fuel').innerHTML = '<p>Fuel recommendation unavailable.</p>'; return; }
+  const n = (x) => (x == null ? '—' : x.toLocaleString('en-US'));
+  const st = (k, v) => `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`;
+  const row = (l, cls) => `<tr><td><b>${esc(l.label)}</b>${cls ? ` <span class="chip">${cls}</span>` : ''}</td><td class="num">${n(l.lb)}</td><td>${esc(l.why)}</td></tr>`;
+  $('fuel').innerHTML = `<div class="rec ${f.level === 'info' ? '' : 'change'}"><b>${f.plannedLb != null ? (f.level === 'nogo' ? 'Planned fuel is below the minimum' : f.level === 'caution' ? `Recommend ${n(f.recommendedLb)} lb block fuel` : 'Planned fuel covers the recommendation') : `Recommend about ${n(f.recommendedLb)} lb block fuel`}</b>${esc(f.text)}</div>
+    <div class="stats">${st('Minimum', n(f.minimumLb) + ' lb')}${st('Recommended', n(f.recommendedLb) + ' lb')}${f.plannedLb != null ? st('Planned (ForeFlight)', n(f.plannedLb) + ' lb') + st('Landing fuel as planned', n(f.landingLb) + ' lb') : ''}</div>
+    <div class="table-wrap"><table><tr><th>Item</th><th>lb</th><th>Basis</th></tr>${f.lines.map((l) => row(l, l.advisory ? 'advised' : '')).join('')}${f.extras.map((l) => row(l, 'contingency')).join('')}</table></div>
+    ${f.notes.length ? `<p>${f.notes.map(esc).join(' ')}</p>` : ''}
+    <p class="hint">Based on: ${esc(f.basis)}. Limits used: ${n(f.limits.usableFuelLb)} lb usable fuel, ${n(f.limits.maxTakeoffLb)} lb maximum takeoff, ${n(f.limits.maxLandingLb)} lb maximum landing. Advisory only: the AFM, your weight and balance and your OpSpecs govern.</p>`;
 }
 
 function renderNotams(b) { window.NotamGuide.render(b, $('notams')); }
