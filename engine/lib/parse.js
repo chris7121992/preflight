@@ -85,16 +85,18 @@ function parseGpx(xml) {
 // Route string like "KTEB SBJ J48 ... KPBI" or "KTEB DCT KPBI". Coordinates resolved later.
 function parseRouteString(text) {
   const tokens = String(text).toUpperCase().replace(/[,;]/g, ' ').split(/\s+/).filter(Boolean);
-  const ids = [], procs = [];
-  for (const t of tokens) {
+  const ids = [], procs = [], airways = [];
+  for (let k = 0; k < tokens.length; k++) {
+    const t = tokens[k];
     if (t === 'DCT') continue;
-    if (/^[JVQTABGRLMNPUW]\d{1,4}$/.test(t)) continue; // airways
+    // airways (J22, V16, Q97, UJ20) are kept aside with their place in the route; the two ends are airports
+    if (/^[A-Z]{1,2}\d{1,4}[A-Z]?$/.test(t) && k > 0 && k < tokens.length - 1) { airways.push({ token: t, at: ids.length }); continue; }
     // SIDs and STARs (RUUDY6, PTRON9.PSX, STOOP.STOOP4) are kept aside with their place in the route
     if (/^[A-Z]{3,6}\d[A-Z]?(\.[A-Z0-9]+)?$/.test(t) || /^[A-Z0-9]{2,5}\.[A-Z]{3,6}\d[A-Z]?$/.test(t)) { procs.push({ token: t, at: ids.length }); continue; }
     if (/\//.test(t)) continue; // speed/altitude groups
     if (/^[A-Z0-9]{2,5}$/.test(t)) ids.push(t);
   }
-  return { name: null, waypoints: ids.map((id) => ({ id, type: 'UNRESOLVED' })), procedures: procs, source: 'route' };
+  return { name: null, waypoints: ids.map((id) => ({ id, type: 'UNRESOLVED' })), procedures: procs, airways, source: 'route' };
 }
 
 function parseFlightPlan(text, filename = '') {

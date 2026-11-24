@@ -269,6 +269,9 @@ test('route strings: procedures are kept aside and every US fix is on file', () 
   const p = parseFlightPlan('KDFW HUDAD2.CEVEX RAMBL SNSET J58 PGLET DCT KABQ');
   assert.deepStrictEqual(p.waypoints.map((w) => w.id), ['KDFW', 'RAMBL', 'SNSET', 'PGLET', 'KABQ']);
   assert.deepStrictEqual(p.procedures, [{ token: 'HUDAD2.CEVEX', at: 1 }]);
+  assert.deepStrictEqual(p.airways, [{ token: 'J58', at: 3 }]);
+  const awy = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'public', 'nav', 'airways.json'), 'utf8'));
+  assert.ok(awy.J22.some((pts) => pts.includes('PSX')) && Object.keys(awy).length > 1000);
   assert.deepStrictEqual(parseFlightPlan('KTEB SBJ STOOP.STOOP4 KPBI').procedures, [{ token: 'STOOP.STOOP4', at: 2 }]);
   const nav = (id) => JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'public', 'nav', `${id[0]}.json`), 'utf8'))[id];
   for (const id of ['RAMBL', 'SNSET', 'PGLET', 'MUTEE', 'HUDAD', 'CEVEX']) assert.ok(nav(id) && nav(id)[0][2] === 'F', id);

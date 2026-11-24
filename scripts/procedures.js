@@ -56,13 +56,14 @@ const main = async () => {
   const prev = fs.existsSync(idxFile) ? JSON.parse(fs.readFileSync(idxFile, 'utf8')) : null;
   const navIdx = path.join(NAV_OUT, 'index.json');
   const navPrev = fs.existsSync(navIdx) ? JSON.parse(fs.readFileSync(navIdx, 'utf8')) : null;
-  if (prev && prev.cycle === cycle && navPrev && navPrev.cycle === cycle && !force) { console.log(`Procedures already built for cycle ${cycle}`); return; }
+  if (prev && prev.cycle === cycle && navPrev && navPrev.cycle === cycle && navPrev.airways && !force) { console.log(`Procedures already built for cycle ${cycle}`); return; }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nasr-'));
   const [fix, nav, dpBase, dpRte, dpApt, stBase, stRte, stApt] = await Promise.all([
     csvFrom(tmp, eff, 'FIX', 'FIX_BASE.csv'), csvFrom(tmp, eff, 'NAV', 'NAV_BASE.csv'),
     csvFrom(tmp, eff, 'DP', 'DP_BASE.csv'), csvFrom(tmp, eff, 'DP', 'DP_RTE.csv'), csvFrom(tmp, eff, 'DP', 'DP_APT.csv'),
     csvFrom(tmp, eff, 'STAR', 'STAR_BASE.csv'), csvFrom(tmp, eff, 'STAR', 'STAR_RTE.csv'), csvFrom(tmp, eff, 'STAR', 'STAR_APT.csv'),
   ]);
+  const awy = await csvFrom(tmp, eff, 'AWY', 'AWY_BASE.csv');
   const pos = new Map();
   for (const n of nav) if (n.LAT_DECIMAL && !/DECOMMISSIONED|SHUTDOWN/i.test(n.NAV_STATUS || '')) pos.set(n.NAV_ID, [+(+n.LAT_DECIMAL).toFixed(5), +(+n.LONG_DECIMAL).toFixed(5)]);
   for (const f of fix) if (f.LAT_DECIMAL) pos.set(f.FIX_ID, [+(+f.LAT_DECIMAL).toFixed(5), +(+f.LONG_DECIMAL).toFixed(5)]);
@@ -85,7 +86,15 @@ const main = async () => {
     for (const f of fs.readdirSync(NAV_OUT)) if (f.endsWith('.json')) fs.unlinkSync(path.join(NAV_OUT, f));
     let count = 0;
     for (const [L, v] of shards) { fs.writeFileSync(path.join(NAV_OUT, `${L}.json`), JSON.stringify(v)); count += Object.keys(v).length; }
-    fs.writeFileSync(navIdx, JSON.stringify({ cycle, builtAt: new Date().toISOString(), letters: [...shards.keys()].sort(), count }));
+    // Airways: { J22: [[point, point ...], ...] } in published order (a name used in two regions keeps both)
+    const airways = {};
+    for (const a of awy) {
+      const pts = (a.AIRWAY_STRING || '').split(/\s+/).filter(Boolean);
+      if (a.AWY_ID && pts.length > 1) (airways[a.AWY_ID] = airways[a.AWY_ID] || []).push(pts);
+    }
+    fs.writeFileSync(path.join(NAV_OUT, 'airways.json'), JSON.stringify(airways));
+    console.log(`Cycle ${cycle}: ${Object.keys(airways).length} airways`);
+    fs.writeFileSync(navIdx, JSON.stringify({ cycle, builtAt: new Date().toISOString(), letters: [...shards.keys()].sort(), count, airways: Object.keys(airways).length }));
     console.log(`Cycle ${cycle}: ${count} fix and navaid names in ${shards.size} files`);
   }
 

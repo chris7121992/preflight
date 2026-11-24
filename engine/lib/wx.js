@@ -275,6 +275,13 @@ async function usNav(ids) {
   return out;
 }
 
+async function airways() {
+  const base = config.nav || (config.snapshot ? config.snapshot.replace(/\/data\/?$/, '/nav') : null);
+  if (!base) return null;
+  if (!cache.has('nav:airways')) cache.set('nav:airways', (typeof base === 'function' ? Promise.resolve(base('airways')) : fetch(`${base}/airways.json`).then((r) => (r.ok ? r.json() : null))).catch(() => null));
+  return cache.get('nav:airways');
+}
+
 async function allNavaids() { return config.snapshot ? snap('navaids.json') : null; }
 
-module.exports = { usNav, minimums, procedures, allNavaids, configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nwpPoints, NWP_MODELS, nearestLevel, altToHpa, notams };
+module.exports = { usNav, airways, minimums, procedures, allNavaids, configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nwpPoints, NWP_MODELS, nearestLevel, altToHpa, notams };

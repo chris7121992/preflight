@@ -24,6 +24,25 @@ const isAirportId = (id) => /^[A-Z]{4}$/.test(id) || /^[A-Z0-9]{3,4}$/.test(id);
 // ---------------------------------------------------------------- route resolution
 async function resolveRoute(plan, errors) {
   const wps = plan.waypoints.map((w) => ({ ...w }));
+  const procAt = (plan.procedures || []).map((p) => ({ ...p }));
+  // Airways named in the route are filled in with the points between the fixes on each side
+  if (plan.airways && plan.airways.length) {
+    const all = await wx.safe('US airways (FAA NASR)', () => wx.airways(), errors);
+    for (const aw of [...plan.airways].sort((p, q) => q.at - p.at)) {
+      const prev = wps[aw.at - 1], next = wps[aw.at];
+      if (!all || !all[aw.token] || !prev || !next) continue;
+      for (const pts of all[aw.token]) {
+        // a SID written with its exit fix (PTRON9.PSX) just before the airway joins the airway at that fix
+        const viaProc = procAt.filter((p) => p.at === aw.at).map((p) => p.token.split('.')[1]).find((id) => id && pts.includes(id));
+        const i = pts.indexOf(prev.id) >= 0 ? pts.indexOf(prev.id) : viaProc ? pts.indexOf(viaProc) : -1, j = pts.indexOf(next.id);
+        if (i < 0 || j < 0 || Math.abs(i - j) < 2) continue;
+        const mid = i < j ? pts.slice(i + 1, j) : pts.slice(j + 1, i).reverse();
+        wps.splice(aw.at, 0, ...mid.map((id) => ({ id, type: 'UNRESOLVED', via: aw.token })));
+        for (const p of procAt) if (p.at > aw.at) p.at += mid.length;
+        break;
+      }
+    }
+  }
   const missing = wps.filter((w) => !isFinite(w.lat) || !isFinite(w.lon));
   if (missing.length) {
     const ids = [...new Set(missing.map((w) => w.id))];
@@ -63,12 +82,12 @@ async function resolveRoute(plan, errors) {
   const unresolved = wps.filter((w) => !isFinite(w.lat));
   if (unresolved.length) errors.push({ source: 'route', error: `Could not locate: ${unresolved.map((w) => w.id).join(', ')} (skipped)` });
   // SIDs and STARs named in the route string are filled in with their fixes
-  if (plan.procedures && plan.procedures.length && wps.length >= 2) {
+  if (procAt.length && wps.length >= 2) {
     const usIds = (id) => [id, /^K[A-Z0-9]{3}$/.test(id) ? id.slice(1) : null].filter(Boolean);
     const [depRec, destRec] = await Promise.all([wps[0].id, wps[wps.length - 1].id].map((id) => wx.procedures(usIds(id)).catch(() => null)));
     const wp = (p) => ({ id: p[0], lat: p[1], lon: p[2], type: 'FIX', via: null });
     const ins = [];
-    for (const pr of plan.procedures) {
+    for (const pr of procAt) {
       const [a, b] = pr.token.split('.');
       const prev = wps[pr.at - 1], next = wps[pr.at];
       const match = (list) => (list || []).find((x) => x.code.split('.').some((part) => part === a || (b && part === b)));
