@@ -42,6 +42,9 @@ async function resolveRoute(plan, errors) {
       for (const n of nv || []) push(n.id, { lat: n.lat, lon: n.lon, type: n.type || 'NAVAID' });
       const fx = await wx.safe('fix lookup', () => wx.awc.fix(rest.filter((i) => i.length === 5)), errors);
       for (const f of fx || []) push(f.id, { lat: f.lat, lon: f.lon, type: 'FIX' });
+      // every US fix and navaid from the FAA 28-day data
+      const us = await wx.safe('US fixes and navaids (FAA NASR)', () => wx.usNav(rest), errors);
+      for (const f of us || []) push(f.id, { lat: f.lat, lon: f.lon, type: f.type });
     }
     for (const w of wps) if (!isFinite(w.lat) && endIds.has(w.id) && found.has(w.id)) Object.assign(w, found.get(w.id));
     const known = wps.filter((w) => isFinite(w.lat) && isFinite(w.lon));
@@ -59,7 +62,33 @@ async function resolveRoute(plan, errors) {
   }
   const unresolved = wps.filter((w) => !isFinite(w.lat));
   if (unresolved.length) errors.push({ source: 'route', error: `Could not locate: ${unresolved.map((w) => w.id).join(', ')} (skipped)` });
-  return wps.filter((w) => isFinite(w.lat) && isFinite(w.lon));
+  // SIDs and STARs named in the route string are filled in with their fixes
+  if (plan.procedures && plan.procedures.length && wps.length >= 2) {
+    const usIds = (id) => [id, /^K[A-Z0-9]{3}$/.test(id) ? id.slice(1) : null].filter(Boolean);
+    const [depRec, destRec] = await Promise.all([wps[0].id, wps[wps.length - 1].id].map((id) => wx.procedures(usIds(id)).catch(() => null)));
+    const wp = (p) => ({ id: p[0], lat: p[1], lon: p[2], type: 'FIX', via: null });
+    const ins = [];
+    for (const pr of plan.procedures) {
+      const [a, b] = pr.token.split('.');
+      const prev = wps[pr.at - 1], next = wps[pr.at];
+      const match = (list) => (list || []).find((x) => x.code.split('.').some((part) => part === a || (b && part === b)));
+      const sid = depRec && match(depRec.sids), star = !sid && destRec && match(destRec.stars);
+      let pts = [];
+      if (sid) {
+        const tr = sid.transitions.find((t) => next && t.pts.length && t.pts[t.pts.length - 1][0] === next.id) || sid.transitions.find((t) => b && t.code.split('.').includes(b));
+        const body = sid.bodies.find((x) => tr && x.pts.length && tr.pts.length && x.pts[x.pts.length - 1][0] === tr.pts[0][0]) || sid.bodies[0];
+        pts = [...(body ? body.pts : []), ...(tr ? tr.pts : [])];
+      } else if (star) {
+        const tr = star.transitions.find((t) => prev && t.pts.length && t.pts[0][0] === prev.id) || star.transitions.find((t) => t.code.split('.').includes(a) || (b && t.code.split('.').includes(b)));
+        const body = star.bodies.find((x) => tr && x.pts.length && tr.pts.length && x.pts[0][0] === tr.pts[tr.pts.length - 1][0]) || star.bodies[0];
+        pts = [...(tr ? tr.pts : []), ...(body ? body.pts : [])];
+      }
+      if (pts.length) ins.push({ at: pr.at, pts: pts.map(wp).map((w) => ({ ...w, via: pr.token })) });
+    }
+    for (const x of ins.sort((p, q) => q.at - p.at)) wps.splice(x.at, 0, ...x.pts);
+  }
+  // drop repeats left where a procedure meets the route
+  return wps.filter((w) => isFinite(w.lat) && isFinite(w.lon)).filter((w, i, arr) => !i || w.id !== arr[i - 1].id);
 }
 
 // ---------------------------------------------------------------- timing profile

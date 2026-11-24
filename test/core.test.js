@@ -264,3 +264,13 @@ test('fuel recommendation from a ForeFlight fuel plan and the forecast', () => {
   assert.strictEqual(Math.round(perf.cruise(41000, 18000).flow), 1267);
   assert.strictEqual(Math.round(perf.holdFlow(15000, 10000)), 952);
 });
+
+test('route strings: procedures are kept aside and every US fix is on file', () => {
+  const p = parseFlightPlan('KDFW HUDAD2.CEVEX RAMBL SNSET J58 PGLET DCT KABQ');
+  assert.deepStrictEqual(p.waypoints.map((w) => w.id), ['KDFW', 'RAMBL', 'SNSET', 'PGLET', 'KABQ']);
+  assert.deepStrictEqual(p.procedures, [{ token: 'HUDAD2.CEVEX', at: 1 }]);
+  assert.deepStrictEqual(parseFlightPlan('KTEB SBJ STOOP.STOOP4 KPBI').procedures, [{ token: 'STOOP.STOOP4', at: 2 }]);
+  const nav = (id) => JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'public', 'nav', `${id[0]}.json`), 'utf8'))[id];
+  for (const id of ['RAMBL', 'SNSET', 'PGLET', 'MUTEE', 'HUDAD', 'CEVEX']) assert.ok(nav(id) && nav(id)[0][2] === 'F', id);
+  assert.strictEqual(nav('SBJ')[0][2], 'N');
+});

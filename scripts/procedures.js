@@ -12,6 +12,7 @@ const { execFileSync } = require('child_process');
 const { cycleFor } = require('./minimums');
 
 const OUT = path.join(__dirname, '..', 'public', 'procedures');
+const NAV_OUT = path.join(__dirname, '..', 'public', 'nav');
 const UA = 'preflight-wx-briefing (github.com/chris7121992/preflight)';
 const force = process.argv.includes('--force');
 const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -53,7 +54,9 @@ const main = async () => {
   const eff = effectiveDate(), cycle = cycleFor();
   const idxFile = path.join(OUT, 'index.json');
   const prev = fs.existsSync(idxFile) ? JSON.parse(fs.readFileSync(idxFile, 'utf8')) : null;
-  if (prev && prev.cycle === cycle && !force) { console.log(`Procedures already built for cycle ${cycle}`); return; }
+  const navIdx = path.join(NAV_OUT, 'index.json');
+  const navPrev = fs.existsSync(navIdx) ? JSON.parse(fs.readFileSync(navIdx, 'utf8')) : null;
+  if (prev && prev.cycle === cycle && navPrev && navPrev.cycle === cycle && !force) { console.log(`Procedures already built for cycle ${cycle}`); return; }
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'nasr-'));
   const [fix, nav, dpBase, dpRte, dpApt, stBase, stRte, stApt] = await Promise.all([
     csvFrom(tmp, eff, 'FIX', 'FIX_BASE.csv'), csvFrom(tmp, eff, 'NAV', 'NAV_BASE.csv'),
@@ -63,6 +66,28 @@ const main = async () => {
   const pos = new Map();
   for (const n of nav) if (n.LAT_DECIMAL && !/DECOMMISSIONED|SHUTDOWN/i.test(n.NAV_STATUS || '')) pos.set(n.NAV_ID, [+(+n.LAT_DECIMAL).toFixed(5), +(+n.LONG_DECIMAL).toFixed(5)]);
   for (const f of fix) if (f.LAT_DECIMAL) pos.set(f.FIX_ID, [+(+f.LAT_DECIMAL).toFixed(5), +(+f.LONG_DECIMAL).toFixed(5)]);
+
+  // Every US fix and navaid, for resolving route strings: one file per first letter, { ID: [[lat, lon, kind]] }
+  // (kind F fix, N navaid). Names that repeat keep every position; the engine takes the one nearest the trip.
+  {
+    const shards = new Map(), seen = new Set();
+    const put = (id, lat, lon, kind) => {
+      if (!/^[A-Z0-9]{2,5}$/.test(id || '') || !isFinite(lat) || !isFinite(lon)) return;
+      const key = `${id}|${lat.toFixed(3)}|${lon.toFixed(3)}`;
+      if (seen.has(key)) return; seen.add(key);
+      const L = id[0];
+      if (!shards.has(L)) shards.set(L, {});
+      (shards.get(L)[id] = shards.get(L)[id] || []).push([+lat.toFixed(5), +lon.toFixed(5), kind]);
+    };
+    for (const f of fix) if (f.LAT_DECIMAL) put(f.FIX_ID, +f.LAT_DECIMAL, +f.LONG_DECIMAL, 'F');
+    for (const n of nav) if (n.LAT_DECIMAL && !/DECOMMISSIONED|SHUTDOWN/i.test(n.NAV_STATUS || '') && !/^(VOT|FAN MARKER|MARINE)/i.test(n.NAV_TYPE || '')) put(n.NAV_ID, +n.LAT_DECIMAL, +n.LONG_DECIMAL, 'N');
+    fs.mkdirSync(NAV_OUT, { recursive: true });
+    for (const f of fs.readdirSync(NAV_OUT)) if (f.endsWith('.json')) fs.unlinkSync(path.join(NAV_OUT, f));
+    let count = 0;
+    for (const [L, v] of shards) { fs.writeFileSync(path.join(NAV_OUT, `${L}.json`), JSON.stringify(v)); count += Object.keys(v).length; }
+    fs.writeFileSync(navIdx, JSON.stringify({ cycle, builtAt: new Date().toISOString(), letters: [...shards.keys()].sort(), count }));
+    console.log(`Cycle ${cycle}: ${count} fix and navaid names in ${shards.size} files`);
+  }
 
   const byAirport = new Map();
   const slot = (id) => { if (!byAirport.has(id)) byAirport.set(id, { sids: [], stars: [] }); return byAirport.get(id); };

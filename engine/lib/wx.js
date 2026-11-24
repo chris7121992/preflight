@@ -259,6 +259,22 @@ async function staticRec(kind, ids) {
 const minimums = (ids) => staticRec('minimums', ids);
 const procedures = (ids) => staticRec('procedures', ids.flatMap((id) => (/^K[A-Z]{3}$/.test(id || '') ? [id.slice(1), id] : [id])));
 
+// Every US fix and navaid (FAA NASR, built by scripts/procedures.js), one file per first letter
+async function usNav(ids) {
+  const base = config.nav || (config.snapshot ? config.snapshot.replace(/\/data\/?$/, '/nav') : null);
+  if (!base) return [];
+  const want = [...new Set(ids.filter((i) => /^[A-Z0-9]{2,5}$/.test(i)))];
+  const out = [];
+  await Promise.all([...new Set(want.map((i) => i[0]))].map(async (L) => {
+    const key = `nav:${L}`;
+    if (!cache.has(key)) cache.set(key, (typeof base === 'function' ? Promise.resolve(base(L)) : fetch(`${base}/${L}.json`).then((r) => (r.ok ? r.json() : null))).catch(() => null));
+    const shard = await cache.get(key);
+    if (!shard) return;
+    for (const id of want) if (id[0] === L && shard[id]) for (const p of shard[id]) out.push({ id, lat: p[0], lon: p[1], type: p[2] === 'N' ? 'NAVAID' : 'FIX' });
+  }));
+  return out;
+}
+
 async function allNavaids() { return config.snapshot ? snap('navaids.json') : null; }
 
-module.exports = { minimums, procedures, allNavaids, configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nwpPoints, NWP_MODELS, nearestLevel, altToHpa, notams };
+module.exports = { usNav, minimums, procedures, allNavaids, configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nwpPoints, NWP_MODELS, nearestLevel, altToHpa, notams };

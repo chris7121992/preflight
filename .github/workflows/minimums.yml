@@ -52,7 +52,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A public/minimums public/procedures
+          git add -A public/minimums public/procedures public/nav
           if git diff --cached --quiet; then echo "no change"; exit 0; fi
           git commit -q -m "Approach minimums, SIDs and STARs for FAA cycle $(node -e "console.log(require('./public/procedures/index.json').cycle)")"
           git pull -q --rebase origin main
