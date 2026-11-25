@@ -271,6 +271,7 @@
     const host = document.getElementById('map');
     if (!window.L) { host.innerHTML = '<p class="hint">Map library failed to load.</p>'; return; }
     if (!map) {
+      if (!window.AvMap) await new Promise((res) => { const s = document.createElement('script'); s.src = 'avmap.js?v=' + Date.now(); s.onload = res; s.onerror = res; document.head.appendChild(s); setTimeout(res, 6000); });
       map = L.map('map', { worldCopyJump: true, zoomSnap: 0.5, preferCanvas: false });
       const light = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', { attribution: 'Tiles © Esri', maxZoom: 13 });
       const terrain = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}', { attribution: 'Tiles © Esri', maxZoom: 13 });

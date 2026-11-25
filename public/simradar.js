@@ -41,20 +41,24 @@
       <p class="hint">${esc(sr.method)} A dot means no echo; TS means the model has a thunderstorm there.</p>`;
   }
 
+  // An older cached copy of the page may not include the aviation map script, so it is fetched here when missing
+  const needAv = () => (window.AvMap ? Promise.resolve() : new Promise((res) => { const s = document.createElement('script'); s.src = 'avmap.js?v=' + Date.now(); s.onload = res; s.onerror = res; document.head.appendChild(s); setTimeout(res, 6000); }));
   let map = null;
   async function render(b, el) {
     if (map) { try { map.remove(); } catch (e) { /* gone */ } map = null; }
     el.innerHTML = `<div id="simMapWrap"><p class="hint">Loading the HRRR simulated radar…</p></div>${strip(b)}`;
     const wrap = el.querySelector('#simMapWrap');
     const { init, frames } = await plan(b);
+    await needAv();
     if (!el.isConnected || !wrap.isConnected) return;
     const ok = frames.filter((f) => f.min != null);
-    if (!ok.length || !window.L) {
+    // The map is always drawn (route, fixes and aviation chart); the radar layer joins it when HRRR covers the flight
+    if (!frames.length || !window.L) {
       wrap.innerHTML = `<p class="hint">${init == null ? 'The HRRR simulated radar could not be loaded.' : `The HRRR simulated radar map reaches 18 hours past its latest run (to ${esc(z(new Date(init + 18 * 3600e3).toISOString()))}). Your flight is outside that, so use the route strip below, which draws on the longer-range models. The map will appear when you run the brief closer to departure.`}</p>`;
       return;
     }
     wrap.innerHTML = `<div class="timebar"><input type="range" id="simTime" min="0" max="${frames.length - 1}" value="0" aria-label="Time during flight"><span id="simLabel"></span></div><div id="simMap" class="simmap"></div>
-      <p class="hint">HRRR simulated reflectivity from the ${esc(z(new Date(init).toISOString()))} run, shown for the time the aircraft (blue dot) is at each position. Drag the slider to fly the route. A model forecast, not observed radar. HRRR covers the continental US and nearby waters; outside that area the map is blank and the strip below applies. The map shows navaids and jet airways; zoom in for the FAA enroute chart, or pick another chart with the layers button.</p>`;
+      <p class="hint">${ok.length ? `HRRR simulated reflectivity from the ${esc(z(new Date(init).toISOString()))} run, shown for the time the aircraft (blue dot) is at each position. Drag the slider to fly the route. A model forecast, not observed radar. HRRR covers the continental US and nearby waters; outside that area the map is blank and the strip below applies.` : init == null ? 'The HRRR simulated radar could not be loaded, so the map shows the route only; use the route strip below.' : `No radar on this map: HRRR simulated radar covers ${esc(z(new Date(init).toISOString()))} to ${esc(z(new Date(init + 18 * 3600e3).toISOString()))} and your flight time is outside that. The map shows the route on the aviation chart, and the route strip below draws on the longer-range models.`} The map shows navaids and jet airways; zoom in for the FAA enroute chart, or pick another chart with the layers button.</p>`;
     map = L.map(wrap.querySelector('#simMap'), { zoomSnap: 0.25, scrollWheelZoom: false, maxZoom: 10 });
     if (window.AvMap) L.control.layers(window.AvMap.bases(map), {}, { collapsed: true }).addTo(map);
     else L.tileLayer(BASE, { attribution: 'Tiles © Esri', maxZoom: 10 }).addTo(map);
