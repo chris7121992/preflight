@@ -9,6 +9,9 @@
   const IEM = 'https://mesonet.agron.iastate.edu';
   const BASE = 'https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}';
   const radarUrl = (min) => `${IEM}/cache/tile.py/1.0.0/hrrr::REFD-F${String(min).padStart(4, '0')}-0/{z}/{x}/{y}.png`;
+  // Observed radar mosaic (NEXRAD) for a past time, in 5-minute steps, from the same service
+  const obsUrl = (stamp) => `${IEM}/cache/tile.py/1.0.0/ridge::USCOMP-N0Q-${stamp}/{z}/{x}/{y}.png`;
+  const stamp5 = (ms) => { const d = new Date(Math.floor(ms / 3e5) * 3e5), p2 = (n) => String(n).padStart(2, '0'); return `${d.getUTCFullYear()}${p2(d.getUTCMonth() + 1)}${p2(d.getUTCDate())}${p2(d.getUTCHours())}${p2(d.getUTCMinutes())}`; };
   const z = (iso) => { const d = new Date(iso); return `${String(d.getUTCDate()).padStart(2, '0')}/${String(d.getUTCHours()).padStart(2, '0')}${String(d.getUTCMinutes()).padStart(2, '0')}Z`; };
   const SCALE = [[50, [180, 30, 170], '50+'], [45, [230, 60, 40], '45'], [40, [245, 160, 40], '40'], [35, [245, 222, 60], '35'], [25, [56, 168, 56], '25'], [15, [142, 219, 142], '15']];
   const color = (dbz) => { if (dbz == null) return null; const s = SCALE.find((x) => dbz >= x[0]); return s ? s[1] : null; };
@@ -26,7 +29,15 @@
     const sr = b.simRadar;
     if (!sr || !sr.frames || !sr.frames.length) return { init: null, frames: [] };
     const init = await hrrrRun();
-    const frames = sr.frames.map((f) => { const m = init == null ? null : Math.round((Date.parse(f.t) - init) / 9e5) * 15; return { ...f, min: m != null && m >= 0 && m <= 1080 ? m : null }; });
+    // Each frame gets a radar picture: the observed mosaic when its time has already passed, the HRRR forecast
+    // when the latest run reaches it, and none beyond that (the route is then coloured from the model strip).
+    const now = Date.now();
+    const frames = sr.frames.map((f) => {
+      const t = Date.parse(f.t), m = init == null ? null : Math.round((t - init) / 9e5) * 15;
+      const past = t <= now - 10 * 60e3 && t > now - 20 * 864e5;
+      const min = !past && m != null && m >= 0 && m <= 1080 ? m : null;
+      return { ...f, min, obs: past ? stamp5(t) : null, url: past ? obsUrl(stamp5(t)) : min != null ? radarUrl(min) : null, key: past ? 'o' + stamp5(t) : min != null ? 'f' + min : null };
+    });
     return { init, frames };
   }
 
@@ -51,14 +62,20 @@
     const { init, frames } = await plan(b);
     await needAv();
     if (!el.isConnected || !wrap.isConnected) return;
-    const ok = frames.filter((f) => f.min != null);
+    const ok = frames.filter((f) => f.url);
+    const nObs = ok.filter((f) => f.obs).length, nFc = ok.length - nObs;
     // The map is always drawn (route, fixes and aviation chart); the radar layer joins it when HRRR covers the flight
     if (!frames.length || !window.L) {
       wrap.innerHTML = `<p class="hint">${init == null ? 'The HRRR simulated radar could not be loaded.' : `The HRRR simulated radar map reaches 18 hours past its latest run (to ${esc(z(new Date(init + 18 * 3600e3).toISOString()))}). Your flight is outside that, so use the route strip below, which draws on the longer-range models. The map will appear when you run the brief closer to departure.`}</p>`;
       return;
     }
     wrap.innerHTML = `<div class="timebar"><input type="range" id="simTime" min="0" max="${frames.length - 1}" value="0" aria-label="Time during flight"><span id="simLabel"></span></div><div id="simMap" class="simmap"></div>
-      <p class="hint">${ok.length ? `HRRR simulated reflectivity from the ${esc(z(new Date(init).toISOString()))} run, shown for the time the aircraft (blue dot) is at each position. Drag the slider to fly the route. A model forecast, not observed radar. HRRR covers the continental US and nearby waters; outside that area the map is blank and the strip below applies.` : init == null ? 'The HRRR simulated radar could not be loaded, so the map shows the route only; use the route strip below.' : `No radar on this map: HRRR simulated radar covers ${esc(z(new Date(init).toISOString()))} to ${esc(z(new Date(init + 18 * 3600e3).toISOString()))} and your flight time is outside that. The map shows the route on the aviation chart, and the route strip below draws on the longer-range models.`} The map shows navaids and jet airways; zoom in for the FAA enroute chart, or pick another chart with the layers button.</p>`;
+      <p class="hint">${[
+        nObs ? `${nFc ? 'The part of the flight that is already in the past' : 'This flight time is already in the past, so the map'} shows the radar that was observed (NEXRAD mosaic) at the time the aircraft (blue dot) would be at each position.` : '',
+        nFc ? `HRRR simulated reflectivity from the ${esc(z(new Date(init).toISOString()))} run${nObs ? ' covers the rest' : ', shown for the time the aircraft (blue dot) is at each position'}. A model forecast, not observed radar.` : '',
+        !ok.length ? (init == null ? 'The HRRR simulated radar could not be loaded.' : `The HRRR simulated radar reaches ${esc(z(new Date(init + 18 * 3600e3).toISOString()))} and your flight is later than that.`) + ' The coloured dots on the route are the strongest model echo at each point when you pass (from the strip below); run the brief again within 18 hours of departure for the full radar picture.' : ok.length < frames.length ? 'Where the slider says no radar, the flight is beyond the HRRR run.' : '',
+        ok.length ? 'Drag the slider to fly the route. Radar covers the continental US and nearby waters; outside that the map is blank and the strip below applies.' : '',
+      ].filter(Boolean).join(' ')} The map shows navaids and jet airways; zoom in for the FAA enroute chart, or pick another chart with the layers button.</p>`;
     map = L.map(wrap.querySelector('#simMap'), { zoomSnap: 0.25, scrollWheelZoom: false, maxZoom: 10 });
     if (window.AvMap) L.control.layers(window.AvMap.bases(map), {}, { collapsed: true }).addTo(map);
     else L.tileLayer(BASE, { attribution: 'Tiles © Esri', maxZoom: 10 }).addTo(map);
@@ -74,12 +91,15 @@
     const show = (i) => {
       const f = frames[i];
       plane.setLatLng([f.lat, f.lon]);
-      label.textContent = `${z(f.t)} · ${f.alongNm} nm${f.min == null ? ' · beyond the HRRR run' : ''}`;
-      if (f.min === shown) return;
-      const old = layer; shown = f.min; layer = null;
-      if (f.min != null) layer = L.tileLayer(radarUrl(f.min), { opacity: 0.7, maxZoom: 10 }).addTo(map);
+      label.textContent = `${z(f.t)} · ${f.alongNm} nm · ${f.obs ? 'observed radar' : f.min != null ? 'HRRR forecast' : 'no radar (beyond the HRRR run)'}`;
+      if (f.key === shown) return;
+      const old = layer; shown = f.key; layer = null;
+      if (f.url) layer = L.tileLayer(f.url, { opacity: 0.7, maxZoom: 10, maxNativeZoom: 9, zIndex: 5 }).addTo(map);
       if (old) setTimeout(() => map && map.removeLayer(old), 400);
     };
+    // With no radar picture at all, colour the route from the model strip so the map still shows where echoes are expected
+    const sr = b.simRadar;
+    if (!ok.length && sr && sr.available) for (const r of sr.rows) { const c = color(r.max); L.circleMarker([r.lat, r.lon], { radius: c ? 9 : 4, color: '#111', weight: 1, fillColor: c ? `rgb(${c.join(',')})` : '#fff', fillOpacity: 0.95 }).addTo(map).bindTooltip(`${r.alongNm} nm · ${z(r.t)} · ${r.max >= 15 ? r.max + ' dBZ (strongest model)' : 'no echo'}`); }
     slider.addEventListener('input', () => show(+slider.value));
     show(0);
   }
@@ -110,7 +130,7 @@
       return n;
     };
     await draw(BASE, 1);
-    const got = await draw(radarUrl(f.min), 0.75);
+    const got = await draw(f.url, 0.75);
     if (!got) return null;
     const X = (lon) => mx(lon, zoom) - x0, Y = (lat) => my(lat, zoom) - y0;
     // navaids and jet airways over the echoes, as on the on-screen map
@@ -126,12 +146,13 @@
   async function panels(b) {
     try {
       const { init, frames } = await plan(b);
-      const ok = frames.filter((f) => f.min != null);
+      const ok = frames.filter((f) => f.url);
       if (!ok.length) return { init, frames: frames.length, list: [] };
-      const pick = [...new Set([frames[0], frames[Math.floor((frames.length - 1) / 2)], frames[frames.length - 1]])].filter((f) => f.min != null);
+      const pick = [...new Set([frames[0], frames[Math.floor((frames.length - 1) / 2)], frames[frames.length - 1]])].filter((f) => f.url);
       const names = new Map([[frames[0], 'Departure'], [frames[Math.floor((frames.length - 1) / 2)], 'Mid-flight'], [frames[frames.length - 1], 'Arrival']]);
-      const list = (await Promise.all(pick.map(async (f) => ({ label: `${names.get(f)} ${z(f.t)}, aircraft at ${f.alongNm} nm`, data: await panel(b, f, 828, 540) })))).filter((p) => p.data);
-      return { init, frames: frames.length, list };
+      const list = (await Promise.all(pick.map(async (f) => ({ label: `${names.get(f)} ${z(f.t)}, aircraft at ${f.alongNm} nm${f.obs ? ' (observed)' : ''}`, data: await panel(b, f, 828, 540) })))).filter((p) => p.data);
+      const obs = pick.filter((f) => f.obs).length;
+      return { init, frames: frames.length, list, source: obs === pick.length ? 'Observed radar (NEXRAD mosaic), because the flight time is already in the past, shown for the time the aircraft (blue dot) is at each position.' : obs ? `Observed radar (NEXRAD mosaic) for the panels marked observed and HRRR simulated reflectivity from the ${z(new Date(init).toISOString())} run for the others, each for the time the aircraft (blue dot) is at that position.` : null };
     } catch (e) { return { init: null, frames: 0, list: [] }; }
   }
 

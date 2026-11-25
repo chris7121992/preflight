@@ -309,7 +309,8 @@
         para(`Yellow light (EDR ${tb.thresholds.light}+), orange moderate (${tb.thresholds.moderate}+), red severe (${tb.thresholds.severe}+); < marks the planned level. From model shear, Richardson number, Ellrod deformation and mountain wave terms over thick layers: use it to compare levels, and check GTG, SIGMETs, G-AIRMET Tango and PIREPs for intensity. Convective turbulence is not included.`, { size: 6.2, color: C.muted, gap: 4 });
       }
       if (radar.list.length || (sr && sr.available)) {
-      section('Simulated radar for the flight (model forecast, not observed radar)');
+      section(radar.source ? 'Radar for the flight' : 'Simulated radar for the flight (model forecast, not observed radar)');
+      const rsrc = radar.source || (radar.init ? `HRRR simulated reflectivity from the ${z(new Date(radar.init).toISOString())} run, shown for the time the aircraft (blue dot) is at each position.` : '');
       if (radar.list.length) {
         const three = !!b.fuel, gap = 8, pw = three ? (W - 2 * M - gap * 2) / 3 : (W - 2 * M - gap) / 2, ph = pw * (540 / 828);
         radar.list.slice(0, 3).forEach((pn, i) => {
@@ -322,12 +323,12 @@
         const lx = M + pw + gap + 6, ly = y + ph + 16 + 8;
         if (radar.list.length === 3 && !three) {
           doc.setFont('helvetica', 'normal'); doc.setFontSize(7); doc.setTextColor(...C.ink);
-          doc.text(doc.splitTextToSize(t(`HRRR simulated reflectivity from the ${z(new Date(radar.init).toISOString())} run, shown for the time the aircraft (blue dot) is at each position. Black line: filed route. HRRR covers the continental US and nearby waters; outside it the map is blank and the strip below applies. Tiles: Iowa Environmental Mesonet; base map: Esri.`), pw - 12), lx, ly);
+          doc.text(doc.splitTextToSize(t(`${rsrc} Black line: filed route. HRRR covers the continental US and nearby waters; outside it the map is blank and the strip below applies. Tiles: Iowa Environmental Mesonet; base map: Esri.`), pw - 12), lx, ly);
           doc.text(doc.splitTextToSize(t('This is a model forecast of radar echoes. Storms rarely form exactly where and when a model puts them: read it for the pattern (lines, coverage, timing) and use live radar on the day.'), pw - 12), lx, ly + 58);
         }
         y += (three ? 1 : Math.ceil(Math.min(3, radar.list.length) / 2)) * (ph + 16) + 4;
-        if (three) para(`HRRR simulated reflectivity from the ${z(new Date(radar.init).toISOString())} run, shown for the time the aircraft (blue dot) is at each position. HRRR covers the continental US and nearby waters; outside it the map is blank and the strip below applies. A model forecast, not observed radar: read it for the pattern and use live radar on the day. Tiles: Iowa Environmental Mesonet; base map: Esri.`, { size: 6.4, color: C.muted });
-        else if (radar.list.length !== 3) para(`HRRR simulated reflectivity from the ${z(new Date(radar.init).toISOString())} run, shown for the time the aircraft (blue dot) is at each position. A model forecast, not observed radar.`, { size: 6.8, color: C.muted });
+        if (three) para(`${rsrc} HRRR covers the continental US and nearby waters; outside it the map is blank and the strip below applies. ${radar.source ? '' : 'A model forecast, not observed radar: read it for the pattern and use live radar on the day.'} Tiles: Iowa Environmental Mesonet; base map: Esri.`, { size: 6.4, color: C.muted });
+        else if (radar.list.length !== 3) para(`${rsrc} ${radar.source ? '' : 'A model forecast, not observed radar.'}`, { size: 6.8, color: C.muted });
       } else {
         para(radar.init ? `The HRRR simulated radar map reaches 18 hours past its latest run (to ${z(new Date(radar.init + 18 * 3600e3).toISOString())}). This flight is outside that, so the strip below, from the longer-range models, stands in for it.` : 'The HRRR simulated radar map could not be loaded, so only the route strip is shown.', { size: 7.2 });
       }
