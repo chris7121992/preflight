@@ -72,7 +72,7 @@
     // ------------------------------------------------------------------ page 1
     const radar = (extra && extra.radar) || { list: [] }, sr = b.simRadar;
     const tb = b.turbulence && b.turbulence.available ? b.turbulence : null;
-    const pages = radar.list.length || (sr && sr.available) || b.fuel || tb ? 3 : 2; // page 3 also carries the Part 135 landing limits
+    const pages = extra && extra.conusPage ? 4 : radar.list.length || (sr && sr.available) || b.fuel || tb ? 3 : 2; // page 3 also carries the Part 135 landing limits
     header(`page 1 of ${pages}`);
     y = 62;
     const vcol = d.verdict === 'GO' ? C.go : d.verdict === 'NO-GO' ? C.nogo : C.caution;
@@ -267,8 +267,8 @@
     footer();
 
     // ------------------------------------------------------------------ page 3: simulated radar
-    if (pages === 3) {
-      doc.addPage(); header('page 3 of 3'); y = 64;
+    if (pages >= 3) {
+      doc.addPage(); header(`page 3 of ${pages}`); y = 64;
       if (b.fuel) {
         const f = b.fuel, n = (x) => (x == null ? '-' : x.toLocaleString('en-US'));
         section('Fuel recommendation');
@@ -345,6 +345,36 @@
         });
         para(`Scale: 15 light, 25 light to moderate, 35 moderate, 40 heavy, 45 very heavy, 50+ extreme. A dash means no echo; TS means the model has a thunderstorm there. ${sr.method}`, { size: 6.2, color: C.muted });
       }
+      }
+      // Continental US simulated radar, when the page has room for it
+      const cus = radar.conus || [];
+      if (cus.length) {
+        const gap = 8, pw = (W - 2 * M - gap * 2) / 3, ph = pw * (470 / 828);
+        if (pages === 4) {
+          // no room beside the rest of page 3: the continental US pictures get a page of their own, larger
+          footer(); doc.addPage(); header('page 4 of 4'); y = 64;
+          section('Simulated radar, continental US (HRRR forecast): where cells are forecast');
+          const bw = 336, bh = bw * (470 / 828), bx = (W - bw) / 2;
+          cus.slice(0, 3).forEach((pn) => {
+            try { doc.addImage(pn.data, 'JPEG', bx, y, bw, bh); } catch (e) { /* skip panel */ }
+            doc.setDrawColor(...C.line); doc.setLineWidth(0.6); doc.rect(bx, y, bw, bh);
+            doc.setFont('helvetica', 'bold'); doc.setFontSize(7); doc.setTextColor(...C.ink); doc.text(t(pn.label), bx, y + bh + 9);
+            y += bh + 16;
+          });
+          doc.setFont('helvetica', 'normal');
+          para(`HRRR simulated reflectivity${radar.init ? ` from the ${z(new Date(radar.init).toISOString())} run` : ''} over the continental US, with the route in black and the aircraft (blue dot) where the flight is in progress. A model forecast, not observed radar: storms rarely form exactly where and when a model puts them, so read it for the pattern, coverage and timing. Tiles: Iowa Environmental Mesonet; base map: Esri.`, { size: 6.6, color: C.muted });
+        } else if (y + ph + 44 > H - 38) doc.__conusSkipped = true;
+        else {
+          section('Simulated radar, continental US (HRRR forecast): where cells are forecast');
+          cus.slice(0, 3).forEach((pn, i) => {
+            const x = M + i * (pw + gap);
+            try { doc.addImage(pn.data, 'JPEG', x, y, pw, ph); } catch (e) { /* skip panel */ }
+            doc.setDrawColor(...C.line); doc.setLineWidth(0.6); doc.rect(x, y, pw, ph);
+            doc.setFont('helvetica', 'bold'); doc.setFontSize(6.2); doc.setTextColor(...C.ink); doc.text(t(pn.label), x, y + ph + 8);
+          });
+          y += ph + 14;
+          doc.setFont('helvetica', 'normal');
+        }
       }
       footer();
     }
@@ -531,6 +561,11 @@
     try { if (window.SimRadar) radar = await window.SimRadar.panels(b); } catch (e) { /* brief without radar maps */ }
     for (const k of [1, 0.94, 0.88, 0.82, 0.76, 0.7]) {
       doc = build(b, k, { diagrams, radar });
+      if (doc.getNumberOfPages() <= doc.__pages && !doc.__overflow) break;
+    }
+    // the continental US radar did not fit on page 3: build again with a fourth page for it
+    if (doc.__conusSkipped) for (const k of [1, 0.94, 0.88, 0.82, 0.76, 0.7]) {
+      doc = build(b, k, { diagrams, radar, conusPage: true });
       if (doc.getNumberOfPages() <= doc.__pages && !doc.__overflow) break;
     }
     while (doc.getNumberOfPages() > doc.__pages) doc.deletePage(doc.getNumberOfPages());

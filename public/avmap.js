@@ -16,11 +16,13 @@
 
   // Navaids and airways as a vector layer; labels are drawn for what is in view once zoomed in enough to fit them
   function vector(kind) {
-    const g = L.layerGroup(), labels = L.layerGroup();
+    const g = L.layerGroup(), labels = L.layerGroup(), geo = L.layerGroup();
     let d = null, built = false, map = null;
     const redraw = () => {
       labels.clearLayers();
       if (!d || !map) return;
+      // zoomed out to a continent the airways and navaids are only clutter, so they wait until the view is closer
+      if (map.getZoom() < 4.6) { if (g.hasLayer(geo)) g.removeLayer(geo); } else if (!g.hasLayer(geo)) g.addLayer(geo);
       const z = map.getZoom(), b = map.getBounds().pad(0.05);
       if (z < 5.5) return;
       const taken = [];
@@ -43,8 +45,8 @@
       if (!built) {
         built = true;
         const rend = L.canvas({ padding: 0.4 });
-        for (const [, pts] of d[kind]) L.polyline(pairs(pts), { renderer: rend, color: COL[kind], weight: kind === 'high' ? 0.9 : 0.7, opacity: 0.5, interactive: false }).addTo(g);
-        for (const v of d.nav) L.circleMarker([v[1], v[2]], { renderer: rend, radius: 2.3, color: COL.nav, weight: 1, opacity: 0.8, fillColor: '#fff', fillOpacity: 1, interactive: false }).addTo(g);
+        for (const [, pts] of d[kind]) L.polyline(pairs(pts), { renderer: rend, color: COL[kind], weight: kind === 'high' ? 0.9 : 0.7, opacity: 0.5, interactive: false }).addTo(geo);
+        for (const v of d.nav) L.circleMarker([v[1], v[2]], { renderer: rend, radius: 2.3, color: COL.nav, weight: 1, opacity: 0.8, fillColor: '#fff', fillOpacity: 1, interactive: false }).addTo(geo);
         labels.addTo(g);
       }
       map.on('moveend', redraw); redraw();
