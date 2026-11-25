@@ -212,3 +212,9 @@ h2.sub { margin-top: 18px; }
 
 .adchart { margin: 6px 0 10px; } .adchart summary { cursor: pointer; font-weight: 600; font-size: 13px; }
 .adchart img { display: block; max-width: min(100%, 560px); border: 1px solid var(--line); border-radius: 10px; background: #fff; margin-top: 8px; }
+.adlabel.endnote { background: var(--card); color: #b45309; border: 1.5px solid #e8910c; border-radius: 10px; padding: 3px 7px; font-size: 10.5px; letter-spacing: .02em; cursor: pointer; box-shadow: 0 1px 3px rgba(0,0,0,.18); }
+.adlabel.endnote.warn { background: #e8910c; color: #fff; }
+.adlabel.obst { color: #7a2e0e; background: #fff4e5; border: 1px solid #c2410c; border-radius: 4px; padding: 2px 5px; font-size: 10.5px; cursor: pointer; }
+.adlabel.obst.unlit { border-style: dashed; }
+.adlabel.twyno.note { border-color: #2563eb; color: #2563eb; cursor: pointer; }
+.legend-row .adlabel.lg { transform: none; display: inline-block; margin-right: 6px; vertical-align: middle; cursor: default; }

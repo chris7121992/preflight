@@ -268,7 +268,48 @@
       }
       m.rwys.push(r);
     }
-    for (const [name, v] of labelled) m.labels.push({ name, at: [v.at.lat, v.at.lon], hit: v.hit });
+    // Notations for every other NOTAM: tags at runway ends, notes on taxiways, obstacles, and the rest by airport
+    const notes = act.flatMap((n) => (n.notes || []).map((x) => ({ ...x, n })));
+    m.notes = notes; m.endNotes = []; m.obst = []; m.apNotes = [];
+    const used = new Set();
+    for (const r of m.rwys) {
+      r.notes = [];
+      const names = r.ends.map((e) => e.text);
+      for (const x of notes) {
+        if (!x.rwy || used.has(x)) continue;
+        if (x.rwy.includes('/')) { if (sameRwy(x.rwy, names.join('/'))) { r.notes.push(x); used.add(x); } continue; }
+        const i = names.indexOf(x.rwy);
+        if (i < 0) continue;
+        used.add(x);
+        // a takeoff obstacle note belongs to the departure end, which is the far end of the runway named
+        const e = r.ends[x.der ? 1 - i : i], o = r.ends[x.der ? i : 1 - i];
+        let en = m.endNotes.find((q) => q.end === e.text && q.rwy === r);
+        if (!en) {
+          const kk = Math.cos((e.at[0] * Math.PI) / 180), dy = (e.at[0] - o.at[0]) * 111320, dx = (e.at[1] - o.at[1]) * 111320 * kk, len = Math.hypot(dx, dy) || 1, off = 190;
+          m.endNotes.push((en = { rwy: r, end: e.text, at: [e.at[0] + ((dy / len) * off) / 111320, e.at[1] + ((dx / len) * off) / (111320 * kk)], codes: [], level: 'info', notes: [] }));
+        }
+        if (!en.codes.includes(x.code)) en.codes.push(x.code);
+        if (x.level === 'caution') en.level = 'caution';
+        en.notes.push(x);
+      }
+    }
+    for (const en of m.endNotes) delete en.rwy;
+    for (const x of notes.filter((q) => q.twy)) {
+      const mine = m.twys.filter((tw, i) => ref(twys[i]) === x.twy);
+      if (!mine.length) continue;
+      used.add(x);
+      for (const tw of mine) (tw.notes = tw.notes || []).push(x);
+      const lb = labelled.get(x.twy);
+      if (lb) { lb.notes = lb.notes || []; lb.notes.push(x); }
+    }
+    for (const x of notes.filter((q) => q.lat != null && a.lat != null)) {
+      const d = dist({ lat: x.lat, lon: x.lon }, a) / 1852;
+      if (d > 3) continue;
+      used.add(x);
+      m.obst.push({ ...x, distNm: +d.toFixed(1), near: d <= 0.9 });
+    }
+    m.apNotes = notes.filter((x) => !used.has(x));
+    for (const [name, v] of labelled) m.labels.push({ name, at: [v.at.lat, v.at.lon], hit: v.hit || (v.notes ? 'note' : ''), notes: v.notes || [] });
     m.missing = [...new Set(shown.filter((it) => it.kind === 'TWY' && !twys.some((e) => ref(e) === it.name)).map((x) => x.name))];
     m.unplaced = [...new Set(shown.filter((it) => it.kind === 'TWY' && it.status === 'restricted' && !it.placed && twys.some((e) => ref(e) === it.name)).map((x) => x.name))];
     return m;
@@ -282,26 +323,38 @@
     const map = (mapEl._ad = L.map(mapEl, { zoomSnap: 0.25, attributionControl: true, scrollWheelZoom: false }));
     maps.push(map);
     map.attributionControl.setPrefix(false).addAttribution(osm ? 'Layout © OpenStreetMap contributors' : 'Runways from OurAirports');
-    const tip = (its) => its.map((it) => `<b>${esc(it.n.number || '')}</b> ${esc(it.n.text)}<br><span class="hint">${esc(when(it.n))}</span>`).join('<hr>');
+    const tip = (its) => [...new Map(its.map((it) => [it.n, it])).values()].map((it) => `<b>${esc(it.n.number || '')}</b> ${esc(clip(it.n.text, 420))}<br><span class="hint">${esc(when(it.n))}</span>`).join('<hr>');
     for (const ll of m.aprons) L.polygon(ll, { className: 'ad-apron', weight: 1, interactive: false }).addTo(map);
     for (const t of m.twys) {
       const style = t.state === 'closed' ? { color: COLORS.closed, weight: 5 } : t.state ? { color: t.state === 'dotAffected' ? COLORS.affected : COLORS.closed, weight: 4, dashArray: '2 7', opacity: 0.9 } : { className: 'ad-twy', weight: t.lane ? 1.5 : 3 };
       const line = L.polyline(t.ll, style).addTo(map);
-      if (t.its.length) line.bindPopup(tip(t.its), { maxWidth: 340 });
+      if (t.its.length || (t.notes && t.notes.length)) line.bindPopup(tip([...t.its, ...(t.notes || [])]), { maxWidth: 340 });
     }
     for (const sg of m.segs) L.polyline(sg.ll, { color: COLORS.closed, weight: 7, lineCap: 'butt' }).addTo(map).bindPopup(tip([sg.it]), { maxWidth: 340 });
     for (const x of m.xs) L.marker([x.lat, x.lon], { icon: label('✕', 'xmark dark') }).addTo(map).bindPopup(tip([x.it]), { maxWidth: 340 });
     for (const r of m.rwys) {
       const line = L.polyline(r.ll, r.closed || r.its.length ? { color: r.closed ? COLORS.closed : COLORS.affected, weight: 9, lineCap: 'butt' } : { className: 'ad-rwy', weight: 9, lineCap: 'butt' }).addTo(map);
-      if (r.its.length) line.bindPopup(tip(r.its), { maxWidth: 340 });
+      if (r.its.length || r.notes.length) line.bindPopup(tip([...r.its, ...r.notes]), { maxWidth: 340 });
       for (const p of r.marks) L.marker(p, { icon: label('✕', 'xmark'), interactive: false }).addTo(map);
       for (const e of r.ends) L.marker(e.at, { icon: label(e.text, 'rwyno' + (r.closed ? ' bad' : '')), interactive: false }).addTo(map);
     }
-    for (const v of m.labels) L.marker(v.at, { icon: label(v.name, 'twyno ' + (v.hit === 'closed' ? 'bad' : v.hit === 'part' ? 'warn' : '')), interactive: false }).addTo(map);
-    if (m.bounds.length) map.fitBounds(m.bounds, { padding: [28, 28] }); else map.setView([a.lat, a.lon], 14);
+    for (const v of m.labels) {
+      const mk = L.marker(v.at, { icon: label(v.name, 'twyno ' + (v.hit === 'closed' ? 'bad' : v.hit === 'part' ? 'warn' : v.hit === 'note' ? 'note' : '')), interactive: !!v.notes.length }).addTo(map);
+      if (v.notes.length) mk.bindPopup(tip(v.notes), { maxWidth: 340 });
+    }
+    // Tags beyond the runway ends: what is out or changed for that end (lights, aids, procedures)
+    for (const en of m.endNotes) L.marker(en.at, { icon: label(en.codes.join(' · '), 'endnote' + (en.level === 'caution' ? ' warn' : '')) }).addTo(map).bindPopup(`<b>RWY ${esc(en.end)}</b>: ${esc([...new Set(en.notes.map((x) => x.name))].join(', '))}<hr>${tip(en.notes)}`, { maxWidth: 340 });
+    for (const o of m.obst) {
+      L.marker([o.lat, o.lon], { icon: label(o.code === 'OBST' ? `▲ ${o.ft != null ? o.ft + ' ft' : o.what}` : `◌ ${o.code}`, 'obst' + (o.unlit ? ' unlit' : '')) }).addTo(map).bindPopup(tip([o]), { maxWidth: 340 });
+      if (o.code !== 'OBST' && o.radiusNm) L.circle([o.lat, o.lon], { radius: o.radiusNm * 1852, color: '#7a5af8', weight: 1.5, dashArray: '4 5', fillOpacity: 0.06, interactive: false }).addTo(map);
+    }
+    const fit = [...m.bounds, ...m.endNotes.map((e) => e.at), ...m.obst.filter((o) => o.near).map((o) => [o.lat, o.lon])];
+    if (fit.length) map.fitBounds(fit, { padding: [28, 28] }); else map.setView([a.lat, a.lon], 14);
+    const far = m.obst.filter((o) => !o.near);
     note.innerHTML = [
       osm ? '' : box.dataset.loading ? 'Loading the taxiway layout…' : 'The taxiway layout could not be loaded, so only the runways are drawn.',
       osm && m.missing.length ? `Not on the map (no taxiway with that name in OpenStreetMap): ${esc(m.missing.join(', '))}.` : '',
+      far.length ? `${far.length} obstacle or airspace NOTAM(s) within 3 NM lie outside this view; zoom out to see them.` : '',
       m.unplaced.length ? `Dotted red marks a taxiway that is partly closed where the exact section could not be placed: ${esc(m.unplaced.join(', '))}.` : '',
     ].filter(Boolean).join(' ');
   }
@@ -315,18 +368,45 @@
     return withNotams.filter((a) => a.lat != null).map((a) => {
       const list = n.byAirport[a.id];
       const navs = list.filter((x) => x.active && x.nav).map((x) => x.nav.aid + (x.nav.rwy ? ' ' + x.nav.rwy : ''));
-      try { return { id: a.id, name: a.name, role: a.role, navs: [...new Set(navs)], chart: chartFor(a), ...model(a, list) }; } catch (e) { return null; }
+      try { return { id: a.id, name: a.name, role: a.role, lat: a.lat, lon: a.lon, navs: [...new Set(navs)], chart: chartFor(a), ...model(a, list) }; } catch (e) { return null; }
     }).filter(Boolean);
   }
 
+  // Short label for a notation in the list: which runway end, taxiway, procedure or obstacle it is about
+  const noteWhat = (n) => {
+    const xs = n.notes || [], x = xs[0];
+    if (!x) return '';
+    const rw = [...new Set(xs.filter((q) => q.rwy && !q.der).map((q) => q.rwy))];
+    if (x.code === 'OBST') return `${x.what}${x.ft != null ? ` ${x.ft} ft` : ''}${x.nm != null ? `, ${x.nm} NM ${x.dir}` : ''}${x.unlit ? ', lights out' : ''}`;
+    if (x.proc) return x.proc.replace(/\b([A-Z])([A-Z]+)/g, (q, c, r) => c + r.toLowerCase());
+    if (rw.length) return 'RWY ' + rw.join(', ');
+    if (x.twy) return 'TWY ' + x.twy;
+    if (x.apron) return x.apron.replace(/\b([A-Z])([A-Z]+)/g, (q, c, r) => c + r.toLowerCase());
+    return x.nm != null ? `${x.nm} NM ${x.dir}` : '';
+  };
+  const clip = (s, n) => (String(s || '').length > n ? String(s).slice(0, n - 1).replace(/\s+\S*$/, '') + '…' : String(s || ''));
+  const CODE_ORDER = ['AP CLSD', 'ILS', 'LOC', 'GS', 'ALS', 'PAPI', 'REIL', 'LGT', 'RVR', 'THR', 'DIST', 'FICON', 'WIND', 'ABN', 'IAP', 'ODP', 'DEP', 'SID', 'STAR', 'OBST', 'UAS', 'AIRSPACE', 'TWR', 'WX', 'FUEL', 'ARFF', 'SVC', 'COM', 'WIP', 'MARK', 'AD', 'NOTE'];
+  const codeRank = (c) => { const i = CODE_ORDER.indexOf(c); return i < 0 ? 40 : i; };
   function listHtml(list) {
-    const row = (n, it) => `<tr class="${n.active ? '' : 'off'}"><td><span class="pill ${it ? (it.status === 'closed' || it.status === 'restricted' ? 'nogo' : it.status === 'affected' ? 'caution' : 'info') : 'caution'}">${it ? esc(it.status === 'restricted' ? 'part closed' : it.status === 'minor' ? 'note' : it.status) : 'out'}</span></td><td><b>${it ? esc((it.kind === 'RWY' ? 'RWY ' : it.kind === 'TWY' ? 'TWY ' : '') + it.name) : esc(n.nav.aid + (n.nav.rwy ? ' ' + n.nav.rwy : ''))}</b></td><td>${esc(n.text)}<div class="hint">${esc(n.number || '')} · ${esc(when(n))}${n.active ? '' : ' · not in force at your time'}</div></td></tr>`;
+    const row = (n, cls, pill, what) => `<tr class="${n.active ? '' : 'off'}"><td><span class="pill ${cls}">${esc(pill)}</span></td><td><b>${esc(what)}</b></td><td>${esc(clip(n.text, 520))}<div class="hint">${esc(n.number || '')} · ${esc(when(n))}${n.active ? '' : ' · not in force at your time'}</div></td></tr>`;
     const rank = { closed: 0, restricted: 1, affected: 2, minor: 3 };
     const rows = [];
-    for (const n of list) { if (n.nav) rows.push({ k: 2.5, kind: 'N', h: row(n, null), a: n.active }); for (const it of n.items || []) rows.push({ k: rank[it.status], kind: it.kind, h: row(n, it), a: n.active }); }
-    rows.sort((x, y) => (y.a - x.a) || (x.k - y.k) || (x.kind === 'RWY' ? -1 : 1));
+    for (const n of list) {
+      const x = (n.notes || [])[0];
+      if (n.nav) { rows.push({ k: 2.5, c: 0, kind: 'N', h: row(n, 'caution', 'out', n.nav.aid + (n.nav.rwy ? ' ' + n.nav.rwy : '')), a: n.active }); continue; }
+      const main = (n.items || []).filter((it) => it.status !== 'minor');
+      for (const it of main) rows.push({ k: rank[it.status], c: 0, kind: it.kind, h: row(n, it.status === 'affected' ? 'caution' : 'nogo', it.status === 'restricted' ? 'part closed' : it.status, (it.kind === 'RWY' ? 'RWY ' : it.kind === 'TWY' ? 'TWY ' : '') + it.name), a: n.active });
+      if (!main.length) rows.push({ k: x && x.level === 'caution' ? 2.6 : 3, c: x ? codeRank(x.code) : 50, kind: 'X', h: row(n, x && x.level === 'caution' ? 'caution' : 'info', x ? x.code : 'note', noteWhat(n) || (n.items && n.items[0] ? n.items[0].name : '')), a: n.active });
+    }
+    rows.sort((x, y) => (y.a - x.a) || (x.k - y.k) || (x.c - y.c) || (x.kind === 'RWY' ? -1 : 1));
     const main = rows.filter((r) => r.k < 3), minor = rows.filter((r) => r.k >= 3);
-    return `${main.length ? `<div class="table-wrap"><table class="adlist">${main.map((r) => r.h).join('')}</table></div>` : '<p>No runway, taxiway or apron closures in these NOTAMs.</p>'}${minor.length ? `<details><summary>${minor.length} lighting, sign and marking NOTAM(s)</summary><div class="table-wrap"><table class="adlist">${minor.map((r) => r.h).join('')}</table></div></details>` : ''}`;
+    return `${main.length ? `<div class="table-wrap"><table class="adlist">${main.map((r) => r.h).join('')}</table></div>` : '<p>No closures or outages that affect the approach in these NOTAMs.</p>'}${minor.length ? `<details><summary>${minor.length} other NOTAM(s): lighting, signs, obstacles, procedures and services</summary><div class="table-wrap"><table class="adlist">${minor.map((r) => r.h).join('')}</table></div></details>` : ''}`;
+  }
+  // One chip per kind of notation in force, with a count
+  function chips(list) {
+    const by = new Map();
+    for (const n of list.filter((q) => q.active)) for (const c of new Set((n.notes || []).map((x) => x.code))) { const x = n.notes.find((q) => q.code === c); const v = by.get(c) || { n: 0, name: x.name, caution: false }; v.n++; if (x.level === 'caution') v.caution = true; by.set(c, v); }
+    return [...by.entries()].sort((x, y) => codeRank(x[0]) - codeRank(y[0])).map(([c, v]) => `<span class="pill ${v.caution ? 'caution' : 'info'}" title="${esc(v.name)}">${esc(c)}${v.n > 1 ? ' ×' + v.n : ''}</span>`).join(' ');
   }
 
   function render(b, el) {
@@ -336,14 +416,14 @@
       el.innerHTML = `<p>${esc(n ? n.note : '')}</p>${n && n.links ? `<p>${n.links.map((l) => `<a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.id)} NOTAMs (FAA)</a>`).join(' · ')}</p>` : ''}`;
       return;
     }
-    el.innerHTML = `<p class="hint">${n.source === 'briefing' ? `${n.total} NOTAMs read from your briefing.` : ''} Red is closed, dotted red is partly closed, amber is work in progress or a surface problem. Tap a marked runway or taxiway for the NOTAM. Closures are judged at your time at each airport.</p><div class="legend-row"><span><i class="sw" style="background:${COLORS.closed}"></i>Closed</span><span><i class="sw dot"></i>Partly closed</span><span><i class="sw" style="background:${COLORS.affected}"></i>Work in progress</span></div>`
+    el.innerHTML = `<p class="hint">${n.source === 'briefing' ? `${n.total} NOTAMs read from your briefing.` : ''} Red is closed, dotted red is partly closed, amber is work in progress or a surface problem. Tags beyond a runway end show what is out or changed for that end (ILS, approach lights, PAPI, windcone, approach procedure, takeoff obstacles), triangles are obstacle NOTAMs with their height, and a blue taxiway label has a sign, marking or lighting NOTAM. Tap anything marked for the NOTAM. All are judged at your time at each airport.</p><div class="legend-row"><span><i class="sw" style="background:${COLORS.closed}"></i>Closed</span><span><i class="sw dot"></i>Partly closed</span><span><i class="sw" style="background:${COLORS.affected}"></i>Work in progress</span><span><span class="adlabel endnote warn lg">ILS · ALS</span>Out at that runway end</span><span><span class="adlabel obst lg">▲ 213 ft</span>Obstacle</span><span><span class="adlabel twyno note lg">K</span>Sign, marking or light</span></div>`
       + n.airports.map((a, i) => {
         const list = n.byAirport[a.id] || [];
         const act = list.filter((x) => x.active);
         const cr = [...new Set(act.flatMap((x) => (x.items || []).filter((it) => it.kind === 'RWY' && it.status === 'closed').map((it) => it.name)))];
         const ct = [...new Set(act.flatMap((x) => (x.items || []).filter((it) => it.kind !== 'RWY' && (it.status === 'closed' || it.status === 'restricted')).map((it) => it.name)))];
         return `<div class="adbox" data-i="${i}"><h3>${esc(a.id)} <span class="muted">${esc(a.name)} · ${esc(a.role)}</span></h3>
-          <p>${list.length ? `${cr.length ? `<span class="pill nogo">RWY ${esc(cr.join(', '))} closed</span> ` : '<span class="pill ok">No runway closed</span> '}${ct.length ? `<span class="pill caution">${ct.length} taxiway/apron closure${ct.length > 1 ? 's' : ''}</span>` : ''}` : 'No NOTAMs for this airport were found in the text.'}</p>
+          <p>${list.length ? `${cr.length ? `<span class="pill nogo">RWY ${esc(cr.join(', '))} closed</span> ` : '<span class="pill ok">No runway closed</span> '}${ct.length ? `<span class="pill caution">${ct.length} taxiway/apron closure${ct.length > 1 ? 's' : ''}</span>` : ''} ${chips(list)}` : 'No NOTAMs for this airport were found in the text.'}</p>
           ${list.length ? '<div class="admap"></div><p class="hint adnote"></p>' : ''}
           ${chartFor(a) ? `<details class="adchart"${cached(a.id) ? '' : ' open'}><summary>Taxi diagram from your ForeFlight briefing</summary><img src="${chartFor(a).data}" alt="${esc(a.id)} taxi diagram from the briefing"><p class="hint">As printed in the briefing. Closures are listed below, not drawn on this picture.</p></details>` : ''}
           ${list.length ? listHtml(list) : ''}</div>`;

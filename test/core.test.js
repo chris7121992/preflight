@@ -292,3 +292,25 @@ test('runway length from the Flight Planning Guide tables', () => {
   assert.strictEqual(f.takeoff({ weightLb: 20200, tempC: 38, elevFt: 5433 }).ft, null);
   assert.strictEqual(f.takeoff({ weightLb: 20330, tempC: 20, elevFt: 0 }).ft, null);
 });
+
+test('NOTAM notations: lights, aids, obstacles and procedures beyond closures', () => {
+  const notam = require('../engine/lib/notam');
+  const one = (t) => notam.parseOne(`!HOU 11/001 HOU ${t} 2611010000-2612312359`).notes;
+  assert.deepStrictEqual(one('RWY 04 PAPI U/S').map((x) => [x.code, x.rwy]), [['PAPI', '4']]);
+  const als = one('RWY 22 ALS U/S')[0];
+  assert.strictEqual(als.code, 'ALS'); assert.strictEqual(als.level, 'caution');
+  assert.strictEqual(one('RWY 13L/31R CLSD').length, 0);
+  assert.deepStrictEqual(one('AD AP WINDCONE FOR RWY 04 U/S').map((x) => [x.code, x.rwy]), [['WIND', '4']]);
+  const ils = one('NAV ILS RWY 04 U/S')[0];
+  assert.strictEqual(ils.code, 'ILS'); assert.strictEqual(ils.rwy, '4'); assert.strictEqual(ils.level, 'caution');
+  const ob = one('OBST CRANE (ASN 2026-ASW-17181-OE) 293604N0951723W (2.7NM SSW HOU) 213FT (170FT AGL) FLAGGED AND LGTD')[0];
+  assert.strictEqual(ob.code, 'OBST'); assert.strictEqual(ob.what, 'crane'); assert.strictEqual(ob.ft, 213); assert.strictEqual(ob.nm, 2.7);
+  assert.ok(Math.abs(ob.lat - 29.6011) < 0.001 && Math.abs(ob.lon + 95.2897) < 0.001);
+  assert.ok(one('OBST TOWER LGT (ASR 1050473) 294549.00N0952138.00W (8.2NM NNW HOU) 242.1FT (190.0FT AGL) U/S')[0].unlit);
+  const iap = one('IAP WILLIAM P HOBBY, HOUSTON, TX. ILS OR LOC RWY 13R, AMDT 12D... RNAV (GPS) RWY 4, AMDT 3A... CIRCLING CATS A/B MDA 600/HAA 554.');
+  assert.deepStrictEqual(iap.map((x) => x.rwy).sort(), ['13R', '4']);
+  const odp = one('ODP WILLIAM P HOBBY, HOUSTON, TX. TAKEOFF MINIMUMS AND (OBSTACLE) DEPARTURE PROCEDURES AMDT 7B... TAKEOFF OBSTACLE NOTES: RWY 13R, TEMPORARY CONSTRUCTION EQUIPMENT, 957FT FROM DER');
+  assert.ok(odp.some((x) => x.code === 'DEP' && x.rwy === '13R' && x.der));
+  const twy = notam.parseOne('!HOU 11/002 HOU TWY E EDGE MARKINGS BTN APCH END RWY 13L AND TWY Y NOT MARKED 2611010000-2612312359');
+  assert.strictEqual(twy.items[0].name, 'E'); assert.strictEqual(twy.notes[0].code, 'MARK'); assert.strictEqual(twy.notes[0].twy, 'E');
+});

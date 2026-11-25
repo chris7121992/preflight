@@ -60,16 +60,93 @@ function listAfter(text, key) {
   while ((m = re.exec(text))) {
     const toks = m[1].replace(/[,/&]/g, ' ').split(/\s+/).filter(Boolean);
     if (toks[0] === 'ALL') { out.push('ALL'); continue; }
+    let first = true;
     for (const w of toks) {
       if (w === 'AND') continue;
-      if (!isTwyName(w)) break;
+      // the designator straight after the keyword may be a compass letter (TWY E, TWY N1)
+      if (!(isTwyName(w) || (first && /^[NSEW]\d{0,2}$/.test(w)))) break;
+      first = false;
       out.push(w);
     }
   }
   return [...new Set(out)];
 }
 
+// Everything else a NOTAM can say about an airport, as short notations for the diagram: which runway end or
+// taxiway it belongs to, a position when the text gives one, and a code (PAPI, ALS, ILS, OBST, IAP ...).
+const COORD = /(\d{2})(\d{2})(\d{2}(?:\.\d+)?)([NS]) ?(\d{3})(\d{2})(\d{2}(?:\.\d+)?)([EW])/;
+function coord(txt) {
+  const m = COORD.exec(txt);
+  if (!m) return null;
+  const lat = (+m[1] + +m[2] / 60 + +m[3] / 3600) * (m[4] === 'S' ? -1 : 1), lon = (+m[5] + +m[6] / 60 + +m[7] / 3600) * (m[8] === 'W' ? -1 : 1);
+  return { lat: +lat.toFixed(5), lon: +lon.toFixed(5) };
+}
+const NOTE_NAMES = {
+  PAPI: 'PAPI/VASI', ALS: 'approach lights', LGT: 'runway lights', REIL: 'runway end lights', RVR: 'RVR', THR: 'threshold', DIST: 'declared distances',
+  FICON: 'surface condition', MARK: 'signs or markings', WIP: 'work in progress', WIND: 'windcone', ABN: 'airport beacon', OBST: 'obstacle', UAS: 'drone activity',
+  AIRSPACE: 'airspace', IAP: 'approach procedure', DEP: 'takeoff obstacle note', SID: 'departure procedure', STAR: 'arrival procedure', ODP: 'obstacle departure',
+  SVC: 'service', COM: 'frequency', WX: 'weather reporting', TWR: 'tower', FUEL: 'fuel', ARFF: 'fire and rescue', AD: 'airport', 'AP CLSD': 'airport closed', NAV: 'navaid', NOTE: 'note',
+};
+function annotate(n, cond) {
+  const notes = [];
+  const push = (code, o) => notes.push({ code, name: NOTE_NAMES[code] || code.toLowerCase(), level: 'info', rwy: null, twy: null, ...o });
+  const out = /U\/S|UNUSABLE|NOT AVBL|\bUNREL\b|UNMON|DECOMMISSIONED|\bNA\b|\bOTS\b/.test(cond);
+  const firstRwy = () => { const m = new RegExp(`\\bRWY (${RWY_ID}(?:\\/${RWY_ID})?)`).exec(cond); return m ? m[1].split('/').map(cleanRwy).join('/') : null; };
+  const sub = n.subject;
+  if (sub === 'RWY') {
+    const rwy = firstRwy();
+    const t = cond.replace(/^RWY \S+ ?/, '');
+    const hit = [
+      [/\b(PAPI|VASI|PLASI|PVASI|VGSI)\b/, 'PAPI'], [/\b(ALS|ALSF-?[12]?|MALSR?|MALSF|SSALR|SSALS|SSALF|ODALS|RAIL|SFL)\b/, 'ALS'], [/\b(REIL|RTHL|RENL)\b/, 'REIL'],
+      [/\bRVR[TMR]?\b/, 'RVR'], [/\b(EDGE LGT|CL LGT|TDZ LGT|RCLL|TDZL|HIRL|MIRL|LIRL|RWY LGT|LGT)\b/, 'LGT'], [/DISPLACED|\bTHR\b/, 'THR'],
+      [/DECLARED DIST|\b(TORA|TODA|ASDA|LDA) \d/, 'DIST'], [/\bFICON\b|\bBA (POOR|MEDIUM|NIL|GOOD)/, 'FICON'], [/\bWIP\b|CONST/, 'WIP'], [/SIGN|MARKINGS?|\bMARKED\b/, 'MARK'],
+    ].filter(([re]) => re.test(t)).map((x) => x[1]);
+    // lights named in a threshold or sign NOTAM are not a lighting outage of their own
+    const codes = hit.includes('PAPI') || hit.includes('ALS') || hit.includes('REIL') ? hit.filter((c) => c !== 'LGT' && c !== 'MARK') : hit;
+    if (!codes.length && !/\bCLSD\b/.test(cond)) codes.push('NOTE');
+    for (const code of codes) push(code, { rwy, level: (code === 'ALS' && out) || code === 'DIST' || code === 'THR' || code === 'FICON' ? 'caution' : 'info' });
+  } else if (sub === 'TWY' || sub === 'TXL' || sub === 'APRON' || sub === 'RAMP') {
+    const code = /\bLGT\b/.test(cond) ? 'LGT' : /SIGN|MARKINGS?|\bMARKED\b/.test(cond) ? 'MARK' : /\bWIP\b|CONST/.test(cond) ? 'WIP' : 'NOTE';
+    for (const it of n.items) if (it.status === 'minor') push(code === 'LGT' ? 'LGT' : code, { name: code === 'LGT' ? 'taxiway lights' : NOTE_NAMES[code], twy: it.kind === 'TWY' ? it.name : null, apron: it.kind === 'APRON' ? it.name : null });
+  } else if (sub === 'NAV') {
+    const aid = (/\b(ILS|LOC|GP|GS|VORTAC|VOR\/DME|VOR|NDB|DME|TACAN|LDA)\b/.exec(cond) || [null, 'NAV'])[1];
+    push(aid === 'GP' ? 'GS' : aid, { name: aid === 'NAV' ? 'navaid' : aid, rwy: firstRwy(), level: n.nav && n.nav.part === 'aid' ? 'caution' : 'info' });
+  } else if (sub === 'AD') {
+    if (/WIND ?CONE|WDI\b/.test(cond)) push('WIND', { rwy: firstRwy() });
+    else if (/\bAP CLSD\b/.test(cond)) push('AP CLSD', { level: 'caution', partial: /CLSD (TO|EXC|FOR)\b|\bEXC\b|\bPPR\b/.test(cond) });
+    else if (/\bABN\b/.test(cond)) push('ABN', {});
+    else push('AD', {});
+  } else if (sub === 'OBST' || sub === 'AIRSPACE') {
+    const c = coord(cond), h = /(\d+(?:\.\d+)?) ?FT \((\d+(?:\.\d+)?) ?FT AGL\)/.exec(cond), rel = /\((\d+(?:\.\d+)?) ?NM ([NSEW]{1,3}) ([A-Z0-9]{3,4})\)/.exec(cond), rad = /(\d+(?:\.\d+)?) ?NM RADIUS/.exec(cond);
+    const what = sub === 'OBST' ? (/^OBST ([A-Z ]+?)(?: LGT)?(?= \(| \d|$)/.exec(cond) || [null, 'OBSTACLE'])[1].trim() : (/\bUAS\b/.test(cond) ? 'UAS' : 'AIRSPACE');
+    push(sub === 'OBST' ? 'OBST' : what, {
+      what: what.toLowerCase(), lat: c ? c.lat : null, lon: c ? c.lon : null, ft: h ? Math.round(+h[1]) : null, agl: h ? Math.round(+h[2]) : null,
+      nm: rel ? +rel[1] : null, dir: rel ? rel[2] : null, radiusNm: rad ? +rad[1] : null, unlit: sub === 'OBST' && /LGT\b.*U\/S/.test(cond),
+    });
+  } else if (sub === 'IAP') {
+    const rw = [...new Set([...cond.matchAll(new RegExp(`\\b(?:ILS|LOC|RNAV|RNP|GPS|VOR|NDB|LDA|TACAN|DME|\\))[^.]{0,24}? RWY (${RWY_ID})`, 'g'))].map((m) => cleanRwy(m[1])))];
+    const na = /\bNA\b|NOT AUTHORIZED/.test(cond);
+    if (rw.length) for (const r of rw) push('IAP', { rwy: r, level: na ? 'caution' : 'info' }); else push('IAP', { level: na ? 'caution' : 'info' });
+  } else if (sub === 'ODP' || sub === 'SID' || sub === 'STAR') {
+    const proc = sub === 'ODP' ? null : (/\. ([A-Z]+(?: [A-Z]+)? (?:ONE|TWO|THREE|FOUR|FIVE|SIX|SEVEN|EIGHT|NINE) (?:DEPARTURE|ARRIVAL))/.exec(cond) || [])[1] || null;
+    push(sub, { proc, level: /PROCEDURE NA\b/.test(cond) ? 'caution' : 'info' });
+    if (sub === 'ODP' && /OBSTACLE NOTES/.test(cond)) {
+      const part = cond.slice(cond.indexOf('OBSTACLE NOTES'));
+      for (const r of new Set([...part.matchAll(new RegExp(`\\bRWY (${RWY_ID}),`, 'g'))].map((m) => cleanRwy(m[1])))) push('DEP', { rwy: r, der: true });
+    }
+  } else if (sub === 'SVC') {
+    push(/\bWX\b|ASOS|AWOS|ATIS/.test(cond) ? 'WX' : /\b(TWR|ATCT)\b/.test(cond) ? 'TWR' : /FUEL/.test(cond) ? 'FUEL' : /ARFF/.test(cond) ? 'ARFF' : 'SVC', { level: /\b(TWR|ATCT)\b.*CLSD|ARFF/.test(cond) ? 'caution' : 'info' });
+  } else if (sub === 'COM') push('COM', {});
+  else if (!n.items.length) push('NOTE', {});
+  return notes;
+}
+
 function parseOne(raw) {
+  const n = parseBody(raw);
+  try { n.notes = annotate(n, n.summary || ''); } catch (e) { n.notes = []; }
+  return n;
+}
+function parseBody(raw) {
   const text = raw.replace(/^!/, '');
   const head = /^([A-Z][A-Z0-9]{2,3}) (\d{1,2}\/\d{3,4}) ([A-Z0-9]{3,4}) /.exec(text);
   const icao = /^([A-Z]\d{4}\/\d{2})/.exec(text);
@@ -151,4 +228,4 @@ function byAirport(notams, airports) {
 const runwayEnds = (name) => String(name || '').split('/').map(cleanRwy);
 const sameRunway = (a, b) => runwayEnds(a).some((x) => runwayEnds(b).includes(x));
 
-module.exports = { parse, split, parseOne, activeIn, byAirport, sameRunway, stamp };
+module.exports = { parse, split, parseOne, activeIn, byAirport, sameRunway, stamp, NOTE_NAMES };

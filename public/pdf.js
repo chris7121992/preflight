@@ -168,7 +168,7 @@
 
     if (diagrams.length) {
       const n = Math.min(3, diagrams.length), gap = 10, dw = (W - 2 * M - gap * (n - 1)) / Math.max(2, n), dh = (n === 3 ? 128 : 150) * k;
-      if (room(dh + 60 * k) && section('NOTAM closures - red closed, dotted partly closed, amber work in progress')) {
+      if (room(dh + 60 * k) && section('NOTAMs - red closed, dotted partly closed, amber work in progress; tags at runway ends show what is out there')) {
         const y0 = y; let yMax = y;
         diagrams.slice(0, n).forEach((d, i) => {
           const x = M + i * (dw + gap);
@@ -194,12 +194,12 @@
             ct.length ? [`TWY closed: ${ct.join(', ')}`, C.nogo] : null,
             pt.length ? [`TWY partly closed: ${pt.join(', ')}`, C.nogo] : null,
             wt.length ? [`TWY work in progress: ${wt.join(', ')}`, C.caution] : null,
-            d.navs.length ? [`Out of service: ${d.navs.join(', ')}`, C.caution] : null,
+            ...noteLines(d),
             d.osm ? null : useChart ? ['Taxi diagram from your ForeFlight briefing; closures are listed, not drawn', C.muted] : ['Runways only: no taxiway layout on file', C.muted],
           ].filter(Boolean);
           for (const [txt, col, bold] of lines) {
             doc.setFont('helvetica', bold ? 'bold' : 'normal'); fs(6.4); doc.setTextColor(...col);
-            const ls = doc.splitTextToSize(t(txt), dw).slice(0, 2);
+            const ls = doc.splitTextToSize(t(txt), dw).slice(0, 3);
             doc.text(ls, x, yy); yy += ls.length * 6.4 * k * 1.2 + 1;
           }
           yMax = Math.max(yMax, yy);
@@ -408,6 +408,24 @@
     doc.setTextColor(...C.ink);
   }
 
+  // Lines under an airport diagram for the NOTAMs that are not closures: by runway end, obstacles, and the rest by kind
+  function noteLines(d) {
+    const out = [], notes = d.notes || [], uniq = (a) => [...new Set(a)];
+    const ends = new Map();
+    for (const x of notes.filter((q) => q.rwy && !q.rwy.includes('/') && !q.der)) { if (!ends.has(x.rwy)) ends.set(x.rwy, { codes: [], caution: false }); const e = ends.get(x.rwy); if (!e.codes.includes(x.code)) e.codes.push(x.code); if (x.level === 'caution') e.caution = true; }
+    const word = { PAPI: 'PAPI', ALS: 'approach lights', ILS: 'ILS', LOC: 'LOC', GS: 'glideslope', WIND: 'windcone', IAP: 'approach NOTAM', LGT: 'lights', REIL: 'REIL', RVR: 'RVR', THR: 'threshold', DIST: 'declared distances', FICON: 'surface condition', MARK: 'markings', WIP: 'work in progress' };
+    if (ends.size) out.push([[...ends.entries()].map(([r, e]) => `RWY ${r}: ${e.codes.map((c) => word[c] || c).join(', ')}`).join('; '), [...ends.values()].some((e) => e.caution) ? C.caution : C.ink]);
+    const der = uniq(notes.filter((q) => q.der).map((q) => q.rwy));
+    const obst = (d.obst || []).filter((o) => o.code === 'OBST').sort((a, b) => a.distNm - b.distNm);
+    const brg = (o) => { if (d.lat == null) return ''; const b = (Math.atan2((o.lon - d.lon) * Math.cos((d.lat * Math.PI) / 180), o.lat - d.lat) * 180) / Math.PI; return ' ' + ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'][Math.round(((b + 360) % 360) / 45) % 8]; };
+    if (obst.length || der.length) out.push([[obst.length ? `Obstacles within 3 NM: ${obst.slice(0, 4).map((o) => `${o.what} ${o.ft != null ? o.ft + ' ft' : ''} ${o.distNm} NM${brg(o)}${o.unlit ? ' unlit' : ''}`.replace(/ +/g, ' ')).join(', ')}${obst.length > 4 ? ` and ${obst.length - 4} more` : ''}` : '', der.length ? `takeoff obstacle notes RWY ${der.join(', ')}` : ''].filter(Boolean).join('; ').replace(/^t/, 'T'), [154, 52, 18]]);
+    const cnt = (codes) => uniq(notes.filter((x) => codes.includes(x.code)).map((x) => x.n)).length;
+    const twn = uniq(notes.filter((x) => x.twy).map((x) => x.twy));
+    const rest = [[cnt(['SID', 'STAR']), 'SID/STAR'], [cnt(['ODP']), 'ODP'], [cnt(['UAS', 'AIRSPACE']), 'airspace'], [cnt(['TWR', 'WX', 'FUEL', 'ARFF', 'SVC', 'COM']), 'service'], [uniq(notes.filter((x) => !x.rwy && ['VOR', 'VORTAC', 'VOR/DME', 'NDB', 'DME', 'TACAN', 'NAV', 'ILS', 'LOC', 'GS', 'LDA'].includes(x.code)).map((x) => x.n)).length, 'navaid'], [cnt(['AP CLSD', 'AD', 'ABN']), 'airport'], [notes.filter((x) => x.code === 'OBST' && !(d.obst || []).some((o) => o.n === x.n)).length, 'obstacle beyond 3 NM']].filter((q) => q[0]).map((q) => `${q[0]} ${q[1]}`);
+    if (rest.length || twn.length) out.push([[rest.length ? `Also in force: ${rest.join(', ')} NOTAM(s)` : '', twn.length ? `signs, markings or lights on TWY ${twn.join(', ')}` : ''].filter(Boolean).join('; ').replace(/^s/, 'S'), C.muted]);
+    return out;
+  }
+
   // Airport closure diagram: aprons, taxiways and runways as vectors, closures in red
   function drawAirport(doc, d, x0, y0, w, h, k) {
     const RED = [200, 30, 30], AMB = [217, 119, 6];
@@ -446,11 +464,27 @@
       doc.setFillColor(255, 255, 255); doc.setDrawColor(...col); doc.setLineWidth(0.4); doc.rect(x, y, tw, th, 'FD');
       doc.setTextColor(...col); doc.text(text, x + 1.5, y + th - 2);
     };
-    for (const v of d.labels.filter((q) => q.hit)) tag(t(v.name), v.at, v.hit === 'closed' ? RED : AMB, 5, true);
+    for (const v of d.labels.filter((q) => q.hit && q.hit !== 'note')) tag(t(v.name), v.at, v.hit === 'closed' ? RED : AMB, 5, true);
     for (const r of d.rwys) for (const e of r.ends) {
       // push the number just beyond the runway end
       const o = r.ends[0] === e ? r.ends[1] : r.ends[0], dx = (e.at[1] - o.at[1]) * cosm, dy = e.at[0] - o.at[0], len = Math.hypot(dx, dy) || 1, off = 7 / sc;
       tag(t(e.text), [e.at[0] + (dy / len) * off, e.at[1] + ((dx / len) * off) / cosm], r.closed ? RED : [22, 32, 43], 5.6, true);
+    }
+    // what is out or changed at each runway end, and obstacle NOTAMs within 3 NM (held at the edge when outside the frame)
+    for (const en of d.endNotes || []) {
+      // set well beyond the runway number, along the runway line
+      const r = d.rwys.find((q) => q.ends.some((e) => e.text === en.end)), e = r && r.ends.find((q) => q.text === en.end), o = r && r.ends.find((q) => q !== e);
+      let at = en.at;
+      if (e && o) { const dx = (e.at[1] - o.at[1]) * cosm, dy = e.at[0] - o.at[0], len = Math.hypot(dx, dy) || 1, off = 19 / sc; at = [e.at[0] + (dy / len) * off, e.at[1] + ((dx / len) * off) / cosm]; }
+      tag(t(en.codes.join(' ')), at, AMB, 4.4, en.level === 'caution');
+    }
+    for (const o of d.obst || []) {
+      const x = Math.min(x0 + w - 6, Math.max(x0 + 6, X(o.lon))), y = Math.min(y0 + h - 12, Math.max(y0 + 14, Y(o.lat)));
+      if (o.code === 'OBST') { doc.setFillColor(194, 65, 12); doc.triangle(x - 2.4, y + 2, x + 2.4, y + 2, x, y - 2.6, 'F'); }
+      else { doc.setDrawColor(122, 90, 248); doc.setLineWidth(0.6); doc.circle(x, y, 2.4, 'S'); }
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(4.4 * k); doc.setTextColor(...(o.code === 'OBST' ? [154, 52, 18] : [90, 60, 200]));
+      const lbl = t(o.code === 'OBST' ? `${o.ft != null ? o.ft + "'" : ''}` : o.code), lw = doc.getTextWidth(lbl);
+      doc.text(lbl, x + 3.4 + lw > x0 + w - 2 ? x - 3.4 - lw : x + 3.4, y + 1.6);
     }
     if (clipped) doc.restoreGraphicsState();
     doc.setDrawColor(...C.line); doc.setLineWidth(0.6); doc.rect(x0, y0, w, h);
