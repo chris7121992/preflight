@@ -13,6 +13,7 @@ const fieldperf = require('./fieldperf');
 const perfLib = require('./perf');
 const nwp = require('./nwp');
 const routing = require('./routing');
+const turb = require('./turb');
 const minimums = require('./minimums');
 const notam = require('./notam');
 const procedures = require('./procedures');
@@ -696,6 +697,11 @@ async function buildBriefing(plan, input) {
   const radarPts = simradar.routePoints(S, 12);
   nwpRaw = nwpStations.length ? await wx.safe('Model guidance (HRRR/NBM/GFS/ECMWF)', () => wx.nwpPoints([...nwpStations, ...radarPts]), errors) : null;
   for (const v of visits) analyzeStation(...v);
+  // Winds and temperatures aloft from four global models around the course, for the turbulence analysis
+  const turbLat = turb.lattice(dep, dest);
+  const turbRaw = turbLat.D >= 60 ? await wx.safe('Turbulence guidance (GFS/ECMWF/ICON/AIFS)', () => wx.turbPoints(turbLat, opts.etd, etaMs, turb.VARS, Object.keys(turb.MODELS)), errors) : null;
+  let T = null;
+  try { T = turbRaw ? turb.analyze({ lat: turbLat, raw: turbRaw, etd: opts.etd, eteMs: etaMs - opts.etd }) : null; } catch (e) { errors.push({ source: 'Turbulence analysis', error: e.message }); }
 
   // ---- en-route hazards
   const hazards = [];
@@ -817,7 +823,7 @@ async function buildBriefing(plan, input) {
     const maxW = winds.reduce((a, b) => ((b.spd || 0) > (a.spd || 0) ? b : a));
     if (maxW.spd >= 120) add('caution', 'Turbulence', `Jet stream core ${maxW.spd} kt near cruise level`, `GFS shows ${maxW.dir}°/${maxW.spd} kt at ${maxW.levelHpa} hPa near ${maxW.alongNm} nm. Strong jets carry clear-air turbulence risk, especially on the cold (poleward) side and where the jet curves; check the GTG and PIREPs.`, 'winds');
     const shear = winds.filter((w) => w.shear300 != null && w.shear300 >= 40);
-    if (shear.length) add('caution', 'Turbulence', `Vertical wind shear near cruise`, `Wind speed changes by ${shear[0].shear300} kt between FL${Math.round(opts.cruiseAlt / 100)} and 300 hPa (~FL300) near ${shear[0].alongNm} nm, a CAT indicator.`, 'winds');
+    if (shear.length && !T) add('caution', 'Turbulence', `Vertical wind shear near cruise`, `Wind speed changes by ${shear[0].shear300} kt between FL${Math.round(opts.cruiseAlt / 100)} and 300 hPa (~FL300) near ${shear[0].alongNm} nm, a CAT indicator.`, 'winds');
     const warm = winds.filter((w) => w.isaDev != null && w.isaDev >= 15);
     if (warm.length && opts.cruiseAlt >= 41000) add('info', 'Performance', `Warm upper air (ISA+${warm[0].isaDev})`, `High ISA deviation reduces climb performance and may limit the initial cruise altitude to below FL${Math.round(opts.cruiseAlt / 100)} at heavy weights.`, 'winds');
   }
@@ -872,8 +878,28 @@ async function buildBriefing(plan, input) {
   // ---- route and altitude options based on the weather
   const hzInputs = { sigmets, isigmets, gairmets, cwas, pireps, tsMetars: tsEnroute };
   const navaidsAll = await wx.allNavaids().catch(() => null);
-  const routeOpts = routing.routeOptions({ route, opts, buildProfile, hazards: hzInputs, navaids: navaidsAll, windComp });
-  const altOpts = routing.altitudeOptions({ route, opts, buildProfile, hazards: hzInputs, windAt });
+  const routeOpts = routing.routeOptions({ route, opts, buildProfile, hazards: hzInputs, navaids: navaidsAll, windComp, turb: T ? T.along : null });
+  const altOpts = routing.altitudeOptions({ route, opts, buildProfile, hazards: hzInputs, windAt, turb: T ? T.along : null });
+  // ---- turbulence: flight level against distance on the filed route, and every route option at every level
+  let turbInfo = { available: false, text: 'The model winds aloft needed for the turbulence analysis could not be loaded.' };
+  if (T) {
+    try {
+      const plannedFl = Math.round(opts.cruiseAlt / 100);
+      const cruiseAt = (pts, fl) => { const wc = windAt ? windAt(fl * 100) : null; const pr = buildProfile(pts.map((q) => ({ ...q })), { ...opts, cruiseAlt: fl * 100 }, wc ? wc.comp : null); return { stats: T.along(pr.samples.filter((x) => x.phase === 'cruise')), eteMin: Math.round((pr.eta - opts.etd) / 60e3) }; };
+      const routesT = routeOpts.candidates.map((c) => {
+        const per = [...new Set([...altOpts.rows.map((r) => r.fl), plannedFl])].map((fl) => ({ fl, ...cruiseAt(c.points, fl) }));
+        const best = per.slice().sort((a, b) => a.stats.score - b.stats.score || a.stats.mean - b.stats.mean || Math.abs(a.fl - plannedFl) - Math.abs(b.fl - plannedFl))[0];
+        const atP = per.find((x) => x.fl === plannedFl) || best;
+        return { name: c.name, offsetNm: c.offsetNm, filed: c.name === 'Filed route', extraMin: c.eteMin - routeOpts.candidates[0].eteMin, atPlanned: atP.stats, best: { fl: best.fl, ...best.stats } };
+      });
+      // the planned level joins the comparison when it is not one of the standard rows (FL400, FL380 ...)
+      const lvRows = altOpts.rows.some((r) => r.fl === plannedFl) ? altOpts.rows : [...altOpts.rows, { fl: plannedFl, turb: cruiseAt(route, plannedFl).stats }];
+      turbInfo = turb.report({ T, samples: S, plannedFl, altRows: lvRows, routes: routesT, fmtZ });
+      const tp = turbInfo.levels.find((r) => r.fl === plannedFl);
+      if (tp && tp.cat !== 'smooth') add(tp.cat === 'light' ? 'info' : 'caution', 'Turbulence', `Models forecast ${tp.cat} turbulence at FL${plannedFl}`, turbInfo.text, 'turbulence');
+      else if (turbInfo.best.changeLevel || turbInfo.best.changeRoute) add('info', 'Turbulence', `Smoother ride: ${turbInfo.best.changeRoute ? turbInfo.best.route + ' at ' : ''}FL${turbInfo.best.fl}`, turbInfo.text, 'turbulence');
+    } catch (e) { errors.push({ source: 'Turbulence analysis', error: e.message }); turbInfo = { available: false, text: 'The turbulence analysis could not be completed.' }; }
+  }
   // ---- SID, STAR and approach for the recommended route
   let procs = null;
   {
@@ -977,6 +1003,7 @@ async function buildBriefing(plan, input) {
     simRadar,
     fuel,
     routing: { route: routeOpts, altitude: altOpts, procedures: procs },
+    turbulence: turbInfo,
     charts: wx.wpc.charts(),
     notams: notamInfo,
     sources: sourceList(errors),
@@ -1042,6 +1069,7 @@ function sourceList(errors) {
     ['Winds aloft (GFS via Open-Meteo)', 'NOAA GFS via Open-Meteo (AWC FB tables were retired in 2026)'],
     ['En-route METARs', 'aviationweather.gov Data API'],
     ['Regional METARs', 'aviationweather.gov Data API (for frontal contrast, moisture and upstream checks)'],
+    ['Turbulence guidance (GFS/ECMWF/ICON/AIFS)', 'GFS, ECMWF IFS, DWD ICON and ECMWF AIFS winds and temperatures on pressure levels, by Open-Meteo'],
     ['Model guidance (HRRR/NBM/GFS/ECMWF)', 'NOAA HRRR/NBM/GFS and ECMWF IFS point forecasts, decoded from GRIB2 by Open-Meteo'],
     ['SIDs and STARs (FAA NASR)', 'FAA NASR 28-day subscription: departure procedures and STARs with their fixes'],
     ['Approach minimums (FAA d-TPP)', 'FAA digital Terminal Procedures: landing minimums and Alternate Minimums pages, rebuilt each 28-day chart cycle'],

@@ -91,13 +91,21 @@ function nearestNavaid(p, navaids) {
   return best;
 }
 
-function routeOptions({ route, opts, buildProfile, hazards: hzIn, navaids, windComp }) {
+// Adds model-forecast turbulence (cruise part of a profile) to an exposure result
+function withTurb(ex, samples, turb) {
+  if (!turb) return ex;
+  const ts = turb(samples.filter((s) => s.phase === 'cruise'));
+  const add = Math.round(ts.modNm * 1.2 + ts.sevNm * 8);
+  return { score: ex.score + add, hits: ts.modNm + ts.sevNm ? [...ex.hits, `model-forecast ${ts.sevNm ? 'severe' : 'moderate'} turbulence (${ts.modNm + ts.sevNm} nm)`] : ex.hits, turb: ts };
+}
+
+function routeOptions({ route, opts, buildProfile, hazards: hzIn, navaids, windComp, turb }) {
   const hz = hazardSet(hzIn);
   const dep = route[0], dest = route[route.length - 1];
   const direct = geo.distNm(dep, dest);
   const crs = geo.bearing(dep, dest);
   const filedProf = buildProfile(route, opts, windComp);
-  const filed = exposure(filedProf.samples, hz);
+  const filed = withTurb(exposure(filedProf.samples, hz), filedProf.samples, turb);
   const base = { name: 'Filed route', offsetNm: 0, distanceNm: Math.round(filedProf.totalNm), eteMin: Math.round((filedProf.eta - opts.etd) / 60e3), ...filed, points: route.map((w) => ({ lat: w.lat, lon: w.lon, id: w.id })) };
   const cands = [base];
   const maxOff = Math.min(200, direct * 0.35);
@@ -108,7 +116,7 @@ function routeOptions({ route, opts, buildProfile, hazards: hzIn, navaids, windC
     const p2 = offset(geo.interpolate(dep, dest, 0.7), side, Math.abs(off));
     const pts = off === 0 ? [dep, dest] : [dep, p1, p2, dest];
     const prof = buildProfile(pts.map((p) => ({ ...p })), opts, windComp);
-    const ex = exposure(prof.samples, hz);
+    const ex = withTurb(exposure(prof.samples, hz), prof.samples, turb);
     const nav = off === 0 ? [] : [nearestNavaid(p1, navaids), nearestNavaid(p2, navaids)];
     const label = off === 0 ? 'Direct' : `${Math.abs(off)} nm ${off < 0 ? 'left' : 'right'} of course (${geo.compass(side)} side)`;
     cands.push({ name: label, offsetNm: off, distanceNm: Math.round(prof.totalNm), eteMin: Math.round((prof.eta - opts.etd) / 60e3), ...ex,
@@ -120,25 +128,26 @@ function routeOptions({ route, opts, buildProfile, hazards: hzIn, navaids, windC
   const ranked = cands.slice().sort((a, b) => a.total - b.total);
   const best = ranked[0];
   let recommendation;
-  if (base.score === 0) recommendation = { keepFiled: true, text: 'No SIGMET, Convective SIGMET, CWA, G-AIRMET icing/turbulence or significant PIREP lies on the filed route at its altitudes and times, so there is no weather reason to change it.' };
+  if (base.score === 0) recommendation = { keepFiled: true, text: `No SIGMET, Convective SIGMET, CWA, G-AIRMET icing/turbulence or significant PIREP lies on the filed route at its altitudes and times${turb ? ', and the models show no moderate turbulence at the cruise level' : ''}, so there is no weather reason to change it.` };
   else if (best !== base && best.score <= base.score * 0.6 && base.score - best.score >= 15) recommendation = { keepFiled: false, best, text: `Consider ${best.name}${best.via && best.via.length ? ` (roughly ${best.routeString})` : ''}. It cuts weather exposure from ${base.score} to ${best.score} points${best.hits.length ? ` (remaining: ${best.hits.join('; ')})` : ' (clear of the listed hazards)'} for ${best.eteMin - base.eteMin >= 0 ? '+' : ''}${best.eteMin - base.eteMin} min and ${best.distanceNm - base.distanceNm >= 0 ? '+' : ''}${best.distanceNm - base.distanceNm} nm. The filed route meets: ${base.hits.join('; ')}.` };
   else recommendation = { keepFiled: true, text: `The filed route meets ${base.hits.join('; ')}, but none of the lateral options within ${Math.round(maxOff)} nm avoids it meaningfully, so a re-route does not help much here. Manage it with altitude, timing or tactical deviations.` };
   return { candidates: cands.map(({ points, ...c }) => ({ ...c, points })), recommendation };
 }
 
 // Compare cruise levels on the filed route: wind component, ISA deviation and advisory exposure.
-function altitudeOptions({ route, opts, buildProfile, hazards: hzIn, windAt }) {
+function altitudeOptions({ route, opts, buildProfile, hazards: hzIn, windAt, turb }) {
   const hz = hazardSet(hzIn);
   const rows = [];
   for (const fl of [310, 330, 350, 370, 390, 410, 430, 450]) {
     const o = { ...opts, cruiseAlt: fl * 100 };
     const wc = windAt ? windAt(fl * 100) : null;
     const prof = buildProfile(route, o, wc ? wc.comp : null);
-    const ex = exposure(prof.samples.filter((s) => s.phase === 'cruise'), hz);
+    const ex = withTurb(exposure(prof.samples.filter((s) => s.phase === 'cruise'), hz), prof.samples, turb);
+    if (ex.turb) ex.score += Math.round(ex.turb.lightNm * 0.1);
     const eteMin = Math.round((prof.eta - opts.etd) / 60e3);
     // Trip fuel from the XLS+ Flight Planning Guide tables (climb, high speed cruise, normal descent; ISA)
     const tp = perf.trip({ distNm: prof.totalNm, altFt: fl * 100, towLb: opts.towLb || 18500, windKt: wc && wc.avg != null ? wc.avg : 0, tasKt: opts.tas });
-    rows.push({ fl, eteMin, fuelLb: Math.round(tp.lb / 10) * 10, cruiseFlow: tp.cruiseFlow, windComponent: wc ? wc.avg : null, isaDev: wc ? wc.isa : null, score: ex.score, hits: ex.hits });
+    rows.push({ fl, eteMin, fuelLb: Math.round(tp.lb / 10) * 10, cruiseFlow: tp.cruiseFlow, windComponent: wc ? wc.avg : null, isaDev: wc ? wc.isa : null, score: ex.score, hits: ex.hits, turb: ex.turb || null });
   }
   const minEte = Math.min(...rows.map((r) => r.eteMin));
   const minFuel = Math.min(...rows.map((r) => r.fuelLb));
@@ -151,4 +160,4 @@ function altitudeOptions({ route, opts, buildProfile, hazards: hzIn, windAt }) {
   return { rows, best: best.fl, text };
 }
 
-module.exports = { routeOptions, altitudeOptions, hazardSet, exposure };
+module.exports = { routeOptions, altitudeOptions, hazardSet, exposure, withTurb };

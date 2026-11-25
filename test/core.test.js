@@ -314,3 +314,25 @@ test('NOTAM notations: lights, aids, obstacles and procedures beyond closures', 
   const twy = notam.parseOne('!HOU 11/002 HOU TWY E EDGE MARKINGS BTN APCH END RWY 13L AND TWY Y NOT MARKED 2611010000-2612312359');
   assert.strictEqual(twy.items[0].name, 'E'); assert.strictEqual(twy.notes[0].code, 'MARK'); assert.strictEqual(twy.notes[0].twy, 'E');
 });
+
+test('turbulence: shear under a jet is rougher than the level above it, and EDR mapping rises with shear', () => {
+  const turb = require('../engine/lib/turb');
+  assert.ok(turb.mapEdr(2, [[1, 0.04], [5, 0.19]]) > turb.mapEdr(1.2, [[1, 0.04], [5, 0.19]]));
+  assert.strictEqual(turb.catOf(0.05), 'smooth'); assert.strictEqual(turb.catOf(0.25), 'moderate');
+  const dep = { lat: 30, lon: -95 }, dest = { lat: 30, lon: -80 };
+  const lat = turb.lattice(dep, dest);
+  const etd = Date.UTC(2026, 10, 26, 12);
+  // westerly jet: 40 kt at 500 hPa rising to 140 kt at 250 hPa, then nearly constant above (smooth near FL430)
+  const spd = { 700: 20, 500: 40, 400: 70, 300: 110, 250: 140, 200: 142, 150: 140 }, tmp = { 700: 0, 500: -18, 400: -30, 300: -45, 250: -52, 200: -56, 150: -57 };
+  const hourly = { time: ['2026-11-26T12:00', '2026-11-26T13:00', '2026-11-26T14:00'] };
+  for (const l of turb.LEVELS) { hourly[`wind_speed_${l}hPa_m`] = [spd[l], spd[l], spd[l]]; hourly[`wind_direction_${l}hPa_m`] = [270, 270, 270]; hourly[`temperature_${l}hPa_m`] = [tmp[l], tmp[l], tmp[l]]; }
+  const T = turb.analyze({ lat, raw: { models: ['m'], data: lat.points.map(() => ({ elevation: 10, hourly })), elevation: null }, etd, eteMs: 2 * 3600e3 });
+  const mid = { lat: 30, lon: -87.5 };
+  const lo = T.at(mid, 32000), hi = T.at(mid, 43000);
+  assert.ok(lo.edr > hi.edr * 1.5, `under the jet ${lo.edr} vs above ${hi.edr}`);
+  const samples = [0, 100, 200, 300].map((s) => ({ ...require('../engine/lib/geo').interpolate(dep, dest, s / 780), s, alt: 32000 }));
+  const st = T.along(samples);
+  assert.ok(st.peak >= lo.edr - 0.02 && st.score >= 0);
+  const pos = turb.locate(lat, { lat: 31, lon: -87.5 });
+  assert.ok(pos.c < -35 && pos.c > -60, `north of an eastbound course is left: ${pos.c}`);
+});

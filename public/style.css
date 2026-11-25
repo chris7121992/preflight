@@ -218,3 +218,4 @@ h2.sub { margin-top: 18px; }
 .adlabel.obst.unlit { border-style: dashed; }
 .adlabel.twyno.note { border-color: #2563eb; color: #2563eb; cursor: pointer; }
 .legend-row .adlabel.lg { transform: none; display: inline-block; margin-right: 6px; vertical-align: middle; cursor: default; }
+.simstrip tr.plannedrow td:first-child { color: var(--accent); }

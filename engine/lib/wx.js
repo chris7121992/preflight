@@ -215,6 +215,20 @@ async function nwpPoints(points) {
 }
 
 // Optional: FAA NOTAM API (requires free credentials from api.faa.gov).
+// Winds and temperatures on pressure levels for the turbulence analysis: several global models at a lattice of
+// points around the course, limited to the hours of the flight. Terrain heights come from the elevation service.
+async function turbPoints(lat, from, to, vars, models) {
+  const hr = (ms) => new Date(Math.floor(ms / 3600e3) * 3600e3).toISOString().slice(0, 16);
+  const ll = (pts) => `latitude=${pts.map((p) => p.lat.toFixed(2)).join(',')}&longitude=${pts.map((p) => p.lon.toFixed(2)).join(',')}`;
+  const url = `https://api.open-meteo.com/v1/forecast?${ll(lat.points)}&hourly=${vars.join(',')}&models=${models.join(',')}&wind_speed_unit=kn&start_hour=${hr(from - 3600e3)}&end_hour=${hr(to + 2 * 3600e3)}&timezone=GMT`;
+  const raw = await get(url, { ttlMs: 900e3, timeoutMs: 30e3 });
+  const arr = Array.isArray(raw) ? raw : [raw];
+  if (arr[0] && arr[0].error) throw new Error(arr[0].reason || 'Open-Meteo error');
+  let elevation = null;
+  try { const e = await get(`https://api.open-meteo.com/v1/elevation?${ll(lat.terrain)}`, { ttlMs: 86400e3 }); if (e && Array.isArray(e.elevation)) elevation = e.elevation; } catch (e) { /* lattice point heights only */ }
+  return { models, data: arr, elevation };
+}
+
 async function notams(ids) {
   const env = typeof process !== 'undefined' && process.env ? process.env : {};
   const id = env.FAA_CLIENT_ID, secret = env.FAA_CLIENT_SECRET;
@@ -284,4 +298,4 @@ async function airways() {
 
 async function allNavaids() { return config.snapshot ? snap('navaids.json') : null; }
 
-module.exports = { usNav, airways, minimums, procedures, allNavaids, configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nwpPoints, NWP_MODELS, nearestLevel, altToHpa, notams };
+module.exports = { turbPoints, usNav, airways, minimums, procedures, allNavaids, configure, snapMeta, RELAY_HOSTS, get, safe, awc, wpc, nws, windsAloft, nwpPoints, NWP_MODELS, nearestLevel, altToHpa, notams };

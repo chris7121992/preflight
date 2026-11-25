@@ -71,7 +71,8 @@
 
     // ------------------------------------------------------------------ page 1
     const radar = (extra && extra.radar) || { list: [] }, sr = b.simRadar;
-    const pages = radar.list.length || (sr && sr.available) || b.fuel ? 3 : 2;
+    const tb = b.turbulence && b.turbulence.available ? b.turbulence : null;
+    const pages = radar.list.length || (sr && sr.available) || b.fuel || tb ? 3 : 2;
     header(`page 1 of ${pages}`);
     y = 62;
     const vcol = d.verdict === 'GO' ? C.go : d.verdict === 'NO-GO' ? C.nogo : C.caution;
@@ -280,6 +281,20 @@
           didParseCell: (h) => { if (h.section === 'body' && /^(Minimum|Recommended)/.test(String(h.row.raw[0]))) { h.cell.styles.fillColor = [238, 244, 253]; h.cell.styles.fontStyle = 'bold'; } },
         });
         para(`${f.notes.join(' ')} Based on: ${f.basis}. Limits used: ${n(f.limits.usableFuelLb)} lb usable fuel, ${n(f.limits.maxTakeoffLb)} lb maximum takeoff, ${n(f.limits.maxLandingLb)} lb maximum landing. The AFM, weight and balance and OpSpecs govern.`, { size: 6.4, color: C.muted, gap: 4 });
+      }
+      if (tb) {
+        section(`Turbulence by flight level on the filed route (EDR, middle of ${tb.models.join(', ')})`);
+        para(tb.text, { size: 7.4, bold: true, gap: 4, color: tb.level === 'caution' ? C.caution : C.ink });
+        const TC = { light: [245, 222, 60], moderate: [245, 160, 40], severe: [230, 60, 40] };
+        const rows = tb.grid.filter((r) => r.fl >= 270);
+        table({
+          head: [['Level', ...tb.cols.map((c) => `${c.alongNm} nm`)]],
+          body: rows.map((r) => [`FL${r.fl}${r.fl === tb.plannedFl ? ' <' : ''}`, ...r.cells.map((c) => (c ? c.edr.toFixed(2) : '-'))]),
+          styles: { fontSize: 6.2 * k, cellPadding: 1.7 * k, halign: 'center', lineColor: C.line, lineWidth: 0.4 },
+          columnStyles: { 0: { halign: 'left', fontStyle: 'bold', cellWidth: 44 } },
+          didParseCell: (h) => { if (h.section !== 'body' || h.column.index === 0) return; const c = rows[h.row.index].cells[h.column.index - 1]; if (c && TC[c.cat]) { h.cell.styles.fillColor = TC[c.cat]; h.cell.styles.fontStyle = 'bold'; h.cell.styles.textColor = c.cat === 'severe' ? [255, 255, 255] : [17, 17, 17]; } },
+        });
+        para(`Yellow light (EDR ${tb.thresholds.light}+), orange moderate (${tb.thresholds.moderate}+), red severe (${tb.thresholds.severe}+); < marks the planned level. From model shear, Richardson number, Ellrod deformation and mountain wave terms over thick layers: use it to compare levels, and check GTG, SIGMETs, G-AIRMET Tango and PIREPs for intensity. Convective turbulence is not included.`, { size: 6.2, color: C.muted, gap: 4 });
       }
       if (radar.list.length || (sr && sr.available)) {
       section('Simulated radar for the flight (model forecast, not observed radar)');

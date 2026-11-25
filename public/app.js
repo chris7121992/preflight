@@ -141,7 +141,7 @@ function status(msg, err, busy) {
 
 // A phone can hold an older copy of the page while loading this newer script, so cards added since are
 // created here when the page does not have them, and one card failing never stops the rest.
-const LATER_CARDS = [['fuelCard', 'fuel', 'Fuel recommendation', 'Fuel', 'modelsCard'], ['simCard', 'simradar', 'Simulated radar for the flight', 'Sim radar', 'terminalsCard']];
+const LATER_CARDS = [['fuelCard', 'fuel', 'Fuel recommendation', 'Fuel', 'modelsCard'], ['simCard', 'simradar', 'Simulated radar for the flight', 'Sim radar', 'terminalsCard'], ['turbCard', 'turb', 'Turbulence by route and altitude', 'Turbulence', 'fuelCard']];
 function ensureCards() {
   for (const [cardId, bodyId, title, tab, beforeId] of LATER_CARDS) {
     if ($(bodyId)) continue;
@@ -165,6 +165,30 @@ function renderSimRadar(b) {
   else loadScriptOnce('simradar.js?v=' + Date.now()).then(go).catch((e) => { el.textContent = 'Simulated radar could not be shown: ' + e.message; });
 }
 
+// Turbulence: flight level against distance on the filed route, the cruise levels and the route options compared
+const TURB_COL = { light: '#f5de3c', moderate: '#f5a028', severe: '#e63c28' };
+function renderTurb(b) {
+  const el = $('turb');
+  if (!el) return;
+  const T = b.turbulence;
+  if (!T || !T.available) { el.innerHTML = `<p>${esc(T ? T.text : 'No turbulence analysis in this briefing.')}</p>`; return; }
+  const cell = (c) => (c ? `<td class="num" title="roughest model ${c.max.toFixed(2)}${c.driver ? ', ' + esc(c.driver) : ''}"${TURB_COL[c.cat] ? ` style="background:${TURB_COL[c.cat]};color:${c.cat === 'severe' ? '#fff' : '#111'};font-weight:700"` : ''}>${c.edr.toFixed(2)}</td>` : '<td class="num">–</td>');
+  const word = (r) => `<span class="pill ${r.cat === 'smooth' ? 'ok' : r.cat === 'light' ? 'info' : 'caution'}">${esc(r.cat)}</span>`;
+  const nm = (r) => (r.modNm + r.sevNm ? `${r.modNm + r.sevNm} nm moderate${r.sevNm ? ' or severe' : ''}${r.lightNm ? `, ${r.lightNm} nm light` : ''}` : r.lightNm ? `${r.lightNm} nm light` : 'none');
+  el.innerHTML = `<p><b>${esc(T.text)}</b></p>
+    <h3>Filed route: flight level against distance (EDR, middle of ${esc(T.models.join(', '))})</h3>
+    <div class="table-wrap"><table class="simstrip"><tr><th>Level</th>${T.cols.map((c) => `<th class="num">${c.alongNm} nm${c.t ? `<div class="hint">${esc(String(c.t).slice(3))}</div>` : ''}</th>`).join('')}</tr>
+    ${T.grid.map((r) => `<tr${r.fl === T.plannedFl ? ' class="plannedrow"' : ''}><td><b>FL${r.fl}</b>${r.fl === T.plannedFl ? ' ◂' : ''}</td>${r.cells.map(cell).join('')}</tr>`).join('')}</table></div>
+    <div class="legend-row"><span><i class="sw" style="background:${TURB_COL.light}"></i>Light (${T.thresholds.light}+)</span><span><i class="sw" style="background:${TURB_COL.moderate}"></i>Moderate (${T.thresholds.moderate}+)</span><span><i class="sw" style="background:${TURB_COL.severe}"></i>Severe (${T.thresholds.severe}+)</span><span>◂ planned level; hover a cell for the roughest model and the cause</span></div>
+    <h3>Cruise levels on the filed route</h3>
+    <div class="table-wrap"><table><tr><th>Level</th><th>Ride</th><th class="num">Peak EDR</th><th class="num">Roughest model</th><th>Exposure in cruise</th><th>Main cause at the peak</th></tr>
+    ${T.levels.slice().sort((x, y) => y.fl - x.fl).map((r) => `<tr><td><b>FL${r.fl}</b>${r.fl === T.plannedFl ? ' (planned)' : ''}${r.fl === T.best.fl && T.best.changeLevel ? ' <span class="pill ok">smoothest</span>' : ''}</td><td>${word(r)}</td><td class="num">${r.peak.toFixed(2)}</td><td class="num">${r.worst.toFixed(2)}</td><td>${esc(nm(r))}</td><td>${r.cat === 'smooth' || !r.peakAt ? '' : esc(`${r.peakAt.driver || 'shear'} near ${r.peakAt.s} nm`)}</td></tr>`).join('')}</table></div>
+    <h3>Route options</h3>
+    <div class="table-wrap"><table><tr><th>Route</th><th>At FL${T.plannedFl}</th><th>Smoothest level</th><th class="num">Time</th></tr>
+    ${T.routes.map((r) => `<tr><td><b>${esc(r.name)}</b>${r.name === T.best.route && T.best.changeRoute ? ' <span class="pill ok">smoothest</span>' : ''}</td><td>${word(r.atPlanned)} ${r.atPlanned.peak.toFixed(2)}, ${esc(nm(r.atPlanned))}</td><td>FL${r.best.fl}: ${word(r.best)} ${r.best.peak.toFixed(2)}, ${esc(nm(r.best))}</td><td class="num">${r.filed ? '' : (r.extraMin >= 0 ? '+' : '') + r.extraMin + ' min'}</td></tr>`).join('')}</table></div>
+    <p class="hint">${esc(T.method)}</p>`;
+}
+
 function render(b) {
   $('results').hidden = false;
   $('printBtn').hidden = false;
@@ -172,7 +196,7 @@ function render(b) {
   lastBrief = b;
   ensureCards();
   const failed = [];
-  for (const fn of [renderVerdict, renderFactors, renderMap, renderSurface, renderTerminals, renderWinds, renderHazards, renderFuel, renderSimRadar, renderPireps, renderEnroute, renderNotams, renderSources, renderRouting, renderModels]) {
+  for (const fn of [renderVerdict, renderFactors, renderMap, renderSurface, renderTerminals, renderWinds, renderHazards, renderFuel, renderTurb, renderSimRadar, renderPireps, renderEnroute, renderNotams, renderSources, renderRouting, renderModels]) {
     try { fn(b); } catch (e) { failed.push(fn.name.replace(/^render/, '')); if (window.console) console.error(fn.name, e); }
   }
   if (failed.length) status(`Briefing ready, but these sections could not be shown: ${failed.join(', ')}. Reload the page to get the latest version.`, true);
