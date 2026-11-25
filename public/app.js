@@ -112,7 +112,7 @@ $('planForm').addEventListener('submit', async (e) => {
     alternate: $('alternate').value.trim(), cruiseAlt: $('cruiseAlt').value, tas: $('tas').value,
     etd: etdLocal ? new Date(etdLocal).toISOString() : null, rules: $('rules').value,
     destCircHaa: $('destCircHaa').value, destCircNa: $('destCircNa').checked, destHat: $('destHat').value, destVisMin: $('destVisMin').value,
-    altNavFacilities: $('altNavFacilities').value, altHat: $('altHat').value, altVisMin: $('altVisMin').value, highMinsPic: $('highMinsPic').checked, notamText: [notamFromFile, $('notamText').value].filter(Boolean).join('\n\n'), approachCat: $('approachCat').value, altGps: $('altGps').checked,
+    altNavFacilities: $('altNavFacilities').value, altHat: $('altHat').value, altVisMin: $('altVisMin').value, highMinsPic: $('highMinsPic').checked, eod80: !!($('eod80') && $('eod80').checked), sicLow: !!($('sicLow') && $('sicLow').checked), notamText: [notamFromFile, $('notamText').value].filter(Boolean).join('\n\n'), approachCat: $('approachCat').value, altGps: $('altGps').checked,
     maxXwind: $('maxXwind').value, maxTailwind: $('maxTailwind').value, minCeiling: $('minCeiling').value, minVis: $('minVis').value, minRunway: $('minRunway').value,
   };
   $('go').disabled = true;
@@ -187,6 +187,17 @@ function renderTurb(b) {
     <div class="table-wrap"><table><tr><th>Route</th><th>At FL${T.plannedFl}</th><th>Smoothest level</th><th class="num">Time</th></tr>
     ${T.routes.map((r) => `<tr><td><b>${esc(r.name)}</b>${r.name === T.best.route && T.best.changeRoute ? ' <span class="pill ok">smoothest</span>' : ''}</td><td>${word(r.atPlanned)} ${r.atPlanned.peak.toFixed(2)}, ${esc(nm(r.atPlanned))}</td><td>FL${r.best.fl}: ${word(r.best)} ${r.best.peak.toFixed(2)}, ${esc(nm(r.best))}</td><td class="num">${r.filed ? '' : (r.extraMin >= 0 ? '+' : '') + r.extraMin + ' min'}</td></tr>`).join('')}</table></div>
     <p class="hint">${esc(T.method)}</p>`;
+}
+
+// Part 135 landing limits at a destination or alternate: the 60% rule and the 80% eligible on-demand allowance
+function p135Html(s, b) {
+  const p = s.field && s.field.part135;
+  if (!p || !p.runway || b.plan.rules !== '135') return '';
+  const n = (x) => x.toLocaleString('en-US');
+  return p.options.map((o) => {
+    const used = p.uses === o.key;
+    return `<div class="rule"><span class="pill ${o.suitable ? 'ok' : used ? 'nogo' : 'info'}">${o.key}% ${o.suitable ? 'ok' : 'short'}</span><span><b>${esc(o.rule)}</b>${used ? ' (applied)' : ''}: land within ${esc(o.label)}. Needs ${n(o.dryFt)} ft dry${p.wet ? `, ${n(o.wetFt)} ft wet (+15%${o.key === '80' ? ', reference only: your Destination Airport Analysis sets the wet margin' : ', 135.385(d)'})` : ''}; runway ${esc(p.runway)} is ${n(p.runwayFt)} ft${p.longestFt > p.runwayFt ? `, longest ${n(p.longestFt)} ft` : ''} (${o.marginFt >= 0 ? n(o.marginFt) + ' ft to spare' : n(-o.marginFt) + ' ft short'}${p.wet ? ' on the wet figure' : ''}).${o.key === '80' && !p.eod ? ' Available only to an eligible on-demand operator with an approved Destination Airport Analysis and OpSpec authorization.' : ''}</span></div>`;
+  }).join('') + (p.eod && p.picMust && p.picMust.length ? `<div class="hint">PIC must make this landing if the SIC has under 100 h in type (135.4): ${esc(p.picMust.join('; '))}.</div>` : '');
 }
 
 function render(b) {
@@ -280,7 +291,8 @@ function renderTerminals(b) {
       ${s.altTest ? `<div class="rule"><span class="pill ${s.alternateRequired || s.alternateAdvised ? 'caution' : 'ok'}">${s.alternateRequired ? 'Alt req' : s.alternateAdvised ? 'Alt advised' : 'No alt'}</span><span><b>${esc(s.altTest.rule)}</b>: needs ≥ ${s.altTest.ceilNeed.toLocaleString()} ft and ${s.altTest.visNeed} SM from ETA−1 h to ETA+1 h (${esc(s.altTest.basis)}). Forecast ${s.altTest.prevailing.ceiling != null ? s.altTest.prevailing.ceiling + ' ft' : 'no ceiling'} / ${s.altTest.prevailing.vis ?? '—'} SM${s.altTest.worst && !s.altTest.worst.ok ? `, TEMPO/PROB ${s.altTest.worst.ceiling ?? 'no ceiling'} / ${s.altTest.worst.vis ?? '—'} SM` : ''} (${esc(s.altTest.basedOn || '')}).${s.altTest.models && s.altTest.models.length ? ` Models: ${s.altTest.models.map((m) => `${esc(m.model)} ${m.ceiling != null ? m.ceiling + ' ft' : 'no low ceiling'}/${m.vis ?? '—'} SM${m.ok ? '' : ' ✗'}`).join(', ')}.` : ''}${srcTag(s.altTest)}</span></div>` : ''}
       ${s.altMins ? `<div class="rule"><span class="pill ${s.altMins.ok ? 'ok' : 'nogo'}">${s.altMins.ok ? 'Legal alt' : 'Below'}</span><span><b>${esc(s.altMins.rule)}</b>: ${s.altMins.none ? esc(s.altMins.basis) : `alternate minimums ${s.altMins.ceil} ft / ${s.altMins.vis} SM (${esc(s.altMins.basis)}).`}${srcTag(s.altMins)}${s.altMins.published ? `<br><span class="hint">FAA alternate minimums entry: ${esc(s.altMins.published)}</span>` : ''}</span></div>` : ''}
       ${rw && !rw.none ? `<div>Wind used ${windStr(s.windUsed)} → best runway <b>${esc(rw.id)}</b> (${rw.len.toLocaleString('en-US')} ft${rw.requiredFt ? `, ${rw.requiredFt.toLocaleString('en-US')} ft needed for ${s.field.kind}` : ''}): <span class="${rw.head < 0 ? 'head' : ''}">${rw.head >= 0 ? 'head' : 'tail'} ${Math.abs(rw.head)} kt</span>, crosswind ${rw.cross}${rw.crossG !== rw.cross ? ` (gust ${rw.crossG})` : ''} kt</div>
-      ${s.field ? `<div class="hint">${esc(s.field.basis)}${s.field.kind === 'landing' && s.field.actualFt ? `. Actual ${s.field.actualFt.toLocaleString('en-US')} ft, with the 60% factor ${s.field.factoredFt.toLocaleString('en-US')} ft, VREF ${s.field.vref} kt` : s.field.actualFt ? `: ${s.field.actualFt.toLocaleString('en-US')} ft` : ': ' + esc(s.field.reason || 'not available')}. From the XLS+ Flight Planning Guide.</div>` : ''}` : ''}
+      ${p135Html(s, b)}
+      ${s.field ? `<div class="hint">${esc(s.field.basis)}${s.field.kind === 'landing' && s.field.actualFt ? `. Actual ${s.field.actualFt.toLocaleString('en-US')} ft, with the 60% factor ${s.field.factoredFt.toLocaleString('en-US')} ft${s.field.part135 ? `, with the 80% eligible on-demand factor ${s.field.part135.options[1].dryFt.toLocaleString('en-US')} ft` : ''}, VREF ${s.field.vref} kt` : s.field.actualFt ? `: ${s.field.actualFt.toLocaleString('en-US')} ft` : ': ' + esc(s.field.reason || 'not available')}. From the XLS+ Flight Planning Guide.</div>` : ''}` : ''}
       ${s.tafPeriods && s.tafPeriods.length ? `<div class="table-wrap"><table><tr><th>Group</th><th>Valid</th><th>Wind</th><th>Vis</th><th>Ceiling</th><th>Wx</th></tr>${s.tafPeriods.map((p) => `<tr><td>${esc(p.change)}${p.probability ? ' ' + p.probability : ''}</td><td>${z(p.from)}–${z(p.to)}</td><td>${windStr(p.wind)}</td><td>${p.vis ?? '—'}</td><td>${p.ceiling ?? '—'}</td><td>${esc(p.wx)}</td></tr>`).join('')}</table></div>` : ''}
     </div>`;
   }).join('');

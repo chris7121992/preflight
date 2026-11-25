@@ -72,7 +72,7 @@
     // ------------------------------------------------------------------ page 1
     const radar = (extra && extra.radar) || { list: [] }, sr = b.simRadar;
     const tb = b.turbulence && b.turbulence.available ? b.turbulence : null;
-    const pages = radar.list.length || (sr && sr.available) || b.fuel || tb ? 3 : 2;
+    const pages = radar.list.length || (sr && sr.available) || b.fuel || tb ? 3 : 2; // page 3 also carries the Part 135 landing limits
     header(`page 1 of ${pages}`);
     y = 62;
     const vcol = d.verdict === 'GO' ? C.go : d.verdict === 'NO-GO' ? C.nogo : C.caution;
@@ -281,6 +281,18 @@
           didParseCell: (h) => { if (h.section === 'body' && /^(Minimum|Recommended)/.test(String(h.row.raw[0]))) { h.cell.styles.fillColor = [238, 244, 253]; h.cell.styles.fontStyle = 'bold'; } },
         });
         para(`${f.notes.join(' ')} Based on: ${f.basis}. Limits used: ${n(f.limits.usableFuelLb)} lb usable fuel, ${n(f.limits.maxTakeoffLb)} lb maximum takeoff, ${n(f.limits.maxLandingLb)} lb maximum landing. The AFM, weight and balance and OpSpecs govern.`, { size: 6.4, color: C.muted, gap: 4 });
+      }
+      const lim = p.rules === '135' ? (b.stations || []).filter((st) => st.field && st.field.part135 && st.field.part135.runway) : [];
+      if (lim.length) {
+        const nn = (x) => x.toLocaleString('en-US');
+        section('Part 135 landing limits (135.385, 135.387)');
+        table({
+          head: [['Airport', 'Runway', 'AFM distance', '60% rule needs', '80% eligible on-demand needs', 'Applied']],
+          body: lim.map((st) => { const q = st.field.part135, [a, e] = q.options; const cell = (o) => `${nn(o.dryFt)} ft${q.wet ? ` (wet ${nn(o.wetFt)})` : ''} - ${o.suitable ? 'met' : 'NOT met'}`; return [`${st.id} ${st.role}`, `${q.runway} ${nn(q.runwayFt)} ft`, `${nn(st.field.actualFt)} ft`, cell(a), cell(e), q.eod ? '80%' : '60%']; }),
+          columnStyles: { 0: { fontStyle: 'bold' } },
+          didParseCell: (h) => { if (h.section === 'body' && /NOT met/.test(String(h.cell.raw))) h.cell.styles.textColor = lim[h.row.index].field.part135.uses === (h.column.index === 3 ? '60' : '80') ? C.nogo : C.muted; },
+        });
+        para(`60%: 135.385(b) and 135.387(a); when the runway may be wet it must be 115% of that figure (135.385(d)). 80%: 135.385(f) and 135.387(b), for an eligible on-demand operation (135.4) with an approved Destination Airport Analysis (135.23(r)) and OpSpec authorization; its wet margin comes from that analysis, so the wet figure shown is a reference. Distances from the XLS+ Flight Planning Guide, dry and zero wind; the AFM governs.`, { size: 6.2, color: C.muted, gap: 4 });
       }
       if (tb) {
         section(`Turbulence by flight level on the filed route (EDR, middle of ${tb.models.join(', ')})`);

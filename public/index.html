@@ -63,7 +63,7 @@
             <label>TAS (kt)<input type="number" id="tas" value="430" min="250" max="470"></label>
           </div>
           <details id="d135">
-            <summary>Approach minimums for alternate rules (91.169 / 135.223 / OpSpec C055)</summary>
+            <summary>Part 135 options: approach minimums for alternate rules (91.169 / 135.223 / OpSpec C055) and the 80% eligible on-demand landing allowance</summary>
             <p class="hint">Minimums are read automatically from the current FAA approach charts for the destination and alternate. Anything you enter below overrides the chart values.</p>
             <div class="grid">
               <label>Approach category<select id="approachCat"><option value="B">B (91–120 kt)</option><option value="C" selected>C (121–140 kt, default)</option><option value="D">D (141–165 kt)</option></select></label>
@@ -76,6 +76,8 @@
               <label>Alternate approach HAT/HAA (ft)<input type="number" id="altHat" placeholder="from chart" step="10"></label>
               <label>Alternate landing vis (SM)<input type="number" id="altVisMin" placeholder="from chart" step="0.25"></label>
               <label class="check"><input type="checkbox" id="highMinsPic"> High-minimums PIC (135.225: +100 ft, +½ SM)</label>
+              <label class="check"><input type="checkbox" id="eod80"> Eligible on-demand operation with an approved Destination Airport Analysis: plan landings within 80% of the runway (135.385(f), 135.387(b))</label>
+              <label class="check"><input type="checkbox" id="sicLow"> SIC has under 100 h in type (135.4: PIC makes certain takeoffs and landings)</label>
             </div>
           </details>
           <details>

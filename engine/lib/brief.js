@@ -256,6 +256,9 @@ async function buildBriefing(plan, input) {
     approachCat: ['A', 'B', 'C', 'D'].includes(input.approachCat) ? input.approachCat : 'C',
     altGps: !!input.altGps,
     highMinsPic: !!input.highMinsPic,
+    // Part 135 eligible on-demand operation with an approved Destination Airport Analysis (135.4, 135.385(f), 135.387(b))
+    eod80: !!input.eod80,
+    sicLow: !!input.sicLow,
     notamText: typeof input.notamText === 'string' ? input.notamText.slice(0, 2e6) : '',
     towLb: input.ffFuel && isFinite(input.ffFuel.tow) && input.ffFuel.tow > 12000 && input.ffFuel.tow < 21000 ? Number(input.ffFuel.tow) : null,
     ffFuel: input.ffFuel && typeof input.ffFuel === 'object' ? Object.fromEntries(Object.entries(input.ffFuel).filter(([, v]) => typeof v === 'number' && isFinite(v))) : null,
@@ -523,9 +526,21 @@ async function buildBriefing(plan, input) {
       } else {
         const assumed = !opts.ldwLb, w = Math.min(opts.ldwLb || perfLib.LIMITS.maxLandingLb, perfLib.LIMITS.maxLandingLb);
         const l = fieldperf.landing({ weightLb: w, tempC, elevFt });
-        // Part 135 turbojets must be able to land within 60% of the runway (135.385, 135.387)
-        const factored = l.ft != null ? Math.ceil(l.ft / 0.6 / 10) * 10 : null;
+        // Part 135 turbojets must be able to land within 60% of the runway (135.385(b), 135.387(a)); an eligible
+        // on-demand operator with an approved Destination Airport Analysis may use 80% (135.385(f), 135.387(b)).
+        // When the runway may be wet or slippery the runway must be 115% of the 60% figure (135.385(d)).
+        const up = (x) => Math.ceil(x / 10) * 10;
+        const factored = l.ft != null ? up(l.ft / 0.6) : null;
+        const wf = (cond && cond.flags) || {};
+        const wetRwy = !!(wf.rain || wf.heavyRain || wf.snow || wf.freezingPrecip || wf.thunder || wf.drizzle || wf.showers);
         field = { kind: 'landing', weightLb: w, assumedWeight: assumed, tempC, tempFrom, elevFt, actualFt: l.ft, factoredFt: factored, requiredFt: opts.rules === '135' ? factored : l.ft, vref: l.vref, reason: l.reason || null };
+        if (l.ft != null) {
+          const o60 = { key: '60', rule: role === 'alternate' ? '135.387(a)' : '135.385(b)', label: '60% of the runway', dryFt: factored, wetFt: up((l.ft / 0.6) * 1.15) };
+          const o80 = { key: '80', rule: role === 'alternate' ? '135.387(b)' : '135.385(f)', label: '80% of the runway, eligible on-demand', dryFt: up(l.ft / 0.8), wetFt: up((l.ft / 0.8) * 1.15) };
+          for (const o of [o60, o80]) o.needFt = wetRwy ? o.wetFt : o.dryFt;
+          field.part135 = { eod: opts.eod80, wet: wetRwy, uses: opts.eod80 ? '80' : '60', options: [o60, o80] };
+          if (opts.rules === '135') field.requiredFt = opts.eod80 ? o80.dryFt : o60.needFt;
+        }
       }
       field.basis = `${field.kind === 'takeoff' ? `Takeoff field length, flaps ${field.flaps ?? 15}` : 'Landing distance'} at ${field.weightLb.toLocaleString('en-US')} lb${field.assumedWeight ? ` (maximum ${field.kind} weight assumed)` : ' (ForeFlight)'}, ${tempC}°C (${tempFrom}), ${elevFt.toLocaleString('en-US')} ft elevation; dry runway, zero wind`;
       station.field = field;
@@ -572,10 +587,33 @@ async function buildBriefing(plan, input) {
     else if (rw) {
       if (field && field.requiredFt != null) {
         rw.requiredFt = field.requiredFt; rw.marginFt = rw.len - field.requiredFt;
-        const what = field.kind === 'takeoff' ? 'takeoff field length' : opts.rules === '135' ? 'landing distance with the 60% factor' : 'landing distance';
+        const p135 = field.kind === 'landing' && opts.rules === '135' ? field.part135 : null;
+        const what = field.kind === 'takeoff' ? 'takeoff field length' : p135 ? (p135.eod ? 'landing distance with the 80% eligible on-demand factor' : `landing distance with the 60% factor${p135.wet ? ' and the 115% wet runway allowance' : ''}`) : opts.rules === '135' ? 'landing distance with the 60% factor' : 'landing distance';
+        if (p135) {
+          // each option against the most suitable runway for the wind (b)(2) and the longest runway in still air (b)(1)
+          const longest = Math.max(rw.len, rw.longestFt || 0), n = (x) => x.toLocaleString('en-US');
+          for (const o of p135.options) { o.suitable = rw.len >= o.needFt; o.longest = longest >= o.needFt; o.marginFt = rw.len - o.needFt; }
+          p135.runway = rw.id; p135.runwayFt = rw.len; p135.longestFt = longest;
+          const [o60, o80] = p135.options;
+          const where = role === 'alternate' ? 'alternate' : 'destination';
+          const daa = 'It needs an approved Destination Airport Analysis in the operations manual (135.23(r): pilot qualifications and experience, manufacturer performance data for normal, abnormal and emergency procedures, airport facilities and topography, runway condition and contamination, weather reporting, added safety margins, inoperative equipment, environmental conditions), authorization in the operations specifications, and an eligible on-demand crew under 135.4: two pilots, PIC 1,500 h with ATP and type rating, SIC 500 h with commercial and instrument, and one of them with 75 h in type.';
+          if (!o60.suitable && o80.suitable && !p135.eod) add('info', 'Performance', `${id}: runway ${rw.id} would meet the 80% eligible on-demand allowance`, `Runway ${rw.id} (${n(rw.len)} ft) is short of the ${n(o60.needFt)} ft needed at 60%${p135.wet ? ' with the wet runway allowance' : ''}, but an eligible on-demand operator may plan to land within 80% of the runway (${o80.rule}), which needs ${n(o80.dryFt)} ft${p135.wet ? ` dry, ${n(o80.wetFt)} ft with 15% added for a wet runway` : ''}. ${daa} Tick the eligible on-demand box in the Part 135 section if that applies to this flight.`, id);
+          if (p135.eod && o60.suitable) add('info', 'Performance', `${id}: runway ${rw.id} meets the standard 60% landing limit`, `Runway ${rw.id} (${n(rw.len)} ft) covers the ${n(o60.needFt)} ft needed at 60%${p135.wet ? ' with the 115% wet runway allowance' : ''}, so the 80% eligible on-demand allowance is not needed at this ${where}.`, id);
+          if (p135.eod && !o60.suitable && rw.len >= o80.dryFt) {
+            add('caution', 'Performance', `${id}: landing relies on the 80% eligible on-demand allowance`, `Runway ${rw.id} is ${n(rw.len)} ft: short of the ${n(o60.needFt)} ft needed at 60%${p135.wet ? ' with the wet runway allowance' : ''}, and ${n(rw.len - o80.dryFt)} ft more than the ${n(o80.dryFt)} ft needed at 80% (${o80.rule}). ${daa}${opts.sicLow ? ' With the SIC under 100 h in type, the PIC must make this landing (135.4(a)(3)(i)).' : ' If the SIC has under 100 h in type and the PIC is not a check pilot, the PIC must make this landing (135.4(a)(3)(i)).'}`, id);
+            if (p135.wet && rw.len < o80.wetFt) add('caution', 'Performance', `${id}: wet runway inside the 80% allowance`, `Precipitation is forecast and runway ${rw.id} (${n(rw.len)} ft) is short of ${n(o80.wetFt)} ft, the 80% figure with 15% added. The 115% wet runway rule in 135.385(d) is written against the 60% figure, so under the 80% allowance the wet runway margin comes from your Destination Airport Analysis and the AFM wet data: confirm it there before relying on this runway.`, id);
+          }
+          if (role === 'destination' && rw.len < field.requiredFt && longest >= field.requiredFt) add('info', 'Performance', `${id}: the longest runway meets the limit in still air`, `The wind favours runway ${rw.id}, which is too short, but the longest runway (${n(longest)} ft) meets the still-air test of 135.385(b)(1). 135.385(e) then allows the takeoff if an alternate is selected that meets all of 135.385(b).`, id);
+          // 135.4(a)(3)(ii): conditions in which the PIC must make the takeoff or landing when the SIC is new on type
+          if (p135.eod) {
+            const pic = [cond && cond.vis != null && cond.vis <= 0.75 ? `visibility ${cond.vis} SM (3/4 SM or less)` : '', p135.wet ? 'runway likely wet or contaminated' : '', rw.crossG > 15 ? `crosswind ${rw.crossG} kt (over 15 kt)` : '', worst && worst.llws ? 'wind shear forecast' : ''].filter(Boolean);
+            p135.picMust = pic;
+            if (pic.length) add(opts.sicLow ? 'caution' : 'info', 'Crew', `${id}: PIC must land if the SIC has under 100 h in type`, `135.4(a)(3)(ii) conditions expected at this ${where}: ${pic.join('; ')}. ${opts.sicLow ? 'You marked the SIC as under 100 h in type, so the PIC makes this landing unless the PIC is a qualified check pilot.' : 'This applies when the SIC has fewer than 100 h as SIC in type and the PIC is not a check pilot.'}`, id);
+          }
+        }
         if (rw.len < field.requiredFt) add('nogo', 'Runway', `${id}: runway ${rw.id} is shorter than the ${what}`, `Runway ${rw.id} is ${rw.len.toLocaleString('en-US')} ft; ${field.requiredFt.toLocaleString('en-US')} ft is needed${rw.longestFt > rw.len ? ` (longest runway ${rw.longestFt.toLocaleString('en-US')} ft)` : ''}. ${caveat}`, id);
         else if (field.kind === 'landing' && opts.rules !== '135' && field.factoredFt > rw.len) add('caution', 'Runway', `${id}: runway ${rw.id} leaves less than the 60% landing margin`, `Landing distance is ${field.actualFt.toLocaleString('en-US')} ft on a ${rw.len.toLocaleString('en-US')} ft runway. That is legal under Part 91, but a Part 135 flight would need ${field.factoredFt.toLocaleString('en-US')} ft. ${caveat}`, id);
-        else if (rw.len < field.requiredFt * 1.15 || (wet && rw.len < field.requiredFt * 1.3)) add('caution', 'Runway', `${id}: runway ${rw.id} is close to the ${what}`, `Runway ${rw.id} is ${rw.len.toLocaleString('en-US')} ft against ${field.requiredFt.toLocaleString('en-US')} ft needed, a margin of ${(rw.len - field.requiredFt).toLocaleString('en-US')} ft. ${caveat}`, id);
+        else if (rw.len < field.requiredFt * 1.15 || (wet && !p135 && rw.len < field.requiredFt * 1.3)) add('caution', 'Runway', `${id}: runway ${rw.id} is close to the ${what}`, `Runway ${rw.id} is ${rw.len.toLocaleString('en-US')} ft against ${field.requiredFt.toLocaleString('en-US')} ft needed, a margin of ${(rw.len - field.requiredFt).toLocaleString('en-US')} ft. ${caveat}`, id);
         if (opts.minRunwayFt && rw.len < opts.minRunwayFt) add('caution', 'Runway', `${id}: best wind runway shorter than your ${opts.minRunwayFt} ft minimum`, `Runway ${rw.id} (${rw.len} ft) is the best aligned option.`, id);
       } else if (rw.shortList) add('caution', 'Runway', `${id}: best wind runway shorter than ${floorFt} ft`, `Runway ${rw.id} (${rw.len} ft) is the best aligned option. Confirm landing/takeoff distance with current weight, temperature and runway condition (and 135 factoring if applicable).`, id);
       if (rw.crossG > opts.maxXwind) add('nogo', 'Crosswind', `${id}: crosswind ${rw.crossG} kt exceeds ${opts.maxXwind} kt`, `Best runway ${rw.id} (${Math.round(rw.hdg)}°T): headwind ${rw.head} kt, crosswind ${rw.cross} kt steady / ${rw.crossG} kt gust, against the XLS+ maximum demonstrated crosswind of ${CE56X.maxDemoCrosswindKt} kt (limit set to ${opts.maxXwind} kt).`, id);
