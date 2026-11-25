@@ -54,11 +54,14 @@
       return;
     }
     wrap.innerHTML = `<div class="timebar"><input type="range" id="simTime" min="0" max="${frames.length - 1}" value="0" aria-label="Time during flight"><span id="simLabel"></span></div><div id="simMap" class="simmap"></div>
-      <p class="hint">HRRR simulated reflectivity from the ${esc(z(new Date(init).toISOString()))} run, shown for the time the aircraft (blue dot) is at each position. Drag the slider to fly the route. A model forecast, not observed radar. HRRR covers the continental US and nearby waters; outside that area the map is blank and the strip below applies.</p>`;
-    map = L.map(wrap.querySelector('#simMap'), { zoomSnap: 0.25, scrollWheelZoom: false });
-    L.tileLayer(BASE, { attribution: 'Tiles © Esri', maxZoom: 10 }).addTo(map);
+      <p class="hint">HRRR simulated reflectivity from the ${esc(z(new Date(init).toISOString()))} run, shown for the time the aircraft (blue dot) is at each position. Drag the slider to fly the route. A model forecast, not observed radar. HRRR covers the continental US and nearby waters; outside that area the map is blank and the strip below applies. The map shows navaids and jet airways; zoom in for the FAA enroute chart, or pick another chart with the layers button.</p>`;
+    map = L.map(wrap.querySelector('#simMap'), { zoomSnap: 0.25, scrollWheelZoom: false, maxZoom: 10 });
+    if (window.AvMap) L.control.layers(window.AvMap.bases(map), {}, { collapsed: true }).addTo(map);
+    else L.tileLayer(BASE, { attribution: 'Tiles © Esri', maxZoom: 10 }).addTo(map);
     const pts = b.plan.route.map((w) => [w.lat, w.lon]);
     L.polyline(pts, { color: '#111', weight: 2.5 }).addTo(map);
+    // the route's own fixes, named
+    b.plan.route.forEach((w, i) => { if (w.id && (i === 0 || i === b.plan.route.length - 1 || b.plan.route.length <= 14 || i % Math.ceil(b.plan.route.length / 12) === 0)) L.marker([w.lat, w.lon], { icon: L.divIcon({ className: 'avlbl fix', html: esc(w.id), iconSize: null }), interactive: false, keyboard: false }).addTo(map); });
     map.fitBounds(pts, { padding: [40, 40] });
     map.attributionControl.addAttribution('HRRR reflectivity © NOAA, Iowa Environmental Mesonet');
     const plane = L.circleMarker(pts[0], { radius: 7, color: '#fff', weight: 2, fillColor: '#1f5fbf', fillOpacity: 1 }).addTo(map);
@@ -106,6 +109,8 @@
     const got = await draw(radarUrl(f.min), 0.75);
     if (!got) return null;
     const X = (lon) => mx(lon, zoom) - x0, Y = (lat) => my(lat, zoom) - y0;
+    // navaids and jet airways over the echoes, as on the on-screen map
+    try { if (window.AvMap) await window.AvMap.drawCanvas(g, X, Y, wPx, hPx, 'high'); } catch (e) { /* plain panel */ }
     g.lineWidth = 3; g.strokeStyle = '#111'; g.lineJoin = 'round'; g.beginPath();
     pts.forEach((p, i) => (i ? g.lineTo(X(p.lon), Y(p.lat)) : g.moveTo(X(p.lon), Y(p.lat)))); g.stroke();
     g.font = 'bold 15px Helvetica, Arial, sans-serif'; g.fillStyle = '#111';

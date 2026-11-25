@@ -274,11 +274,13 @@
       map = L.map('map', { worldCopyJump: true, zoomSnap: 0.5, preferCanvas: false });
       const light = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}', { attribution: 'Tiles © Esri', maxZoom: 13 });
       const terrain = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}', { attribution: 'Tiles © Esri', maxZoom: 13 });
-      light.addTo(map);
+      // aviation charts and the navaid/airway layer when available, with the plain maps still on offer
+      const baseSet = window.AvMap ? window.AvMap.bases(map) : null;
+      if (!baseSet) light.addTo(map);
       const radar = L.tileLayer('https://mesonet.agron.iastate.edu/cache/tile.py/1.0.0/nexrad-n0q-900913/{z}/{x}/{y}.png', { opacity: 0.55, attribution: 'NEXRAD © Iowa Environmental Mesonet', maxZoom: 13 });
       for (const k of ['isobars', 'fronts', 'centers', 'stations', 'hazards', 'pireps', 'route', 'aircraft']) groups[k] = L.layerGroup();
       ['isobars', 'fronts', 'centers', 'stations', 'hazards', 'route', 'aircraft'].forEach((k) => groups[k].addTo(map));
-      ctl = L.control.layers({ 'Light': light, 'Terrain': terrain }, {
+      ctl = L.control.layers(baseSet || { 'Light': light, 'Terrain': terrain }, {
         'Radar (NEXRAD, live)': radar, 'Isobars (4 mb)': groups.isobars, 'Fronts': groups.fronts, 'Highs / lows': groups.centers,
         'Station plots': groups.stations, 'SIGMET / G-AIRMET / CWA on route': groups.hazards, 'PIREPs near route': groups.pireps,
       }, { collapsed: true }).addTo(map);

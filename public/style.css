@@ -219,3 +219,7 @@ h2.sub { margin-top: 18px; }
 .adlabel.twyno.note { border-color: #2563eb; color: #2563eb; cursor: pointer; }
 .legend-row .adlabel.lg { transform: none; display: inline-block; margin-right: 6px; vertical-align: middle; cursor: default; }
 .simstrip tr.plannedrow td:first-child { color: var(--accent); }
+.avlbl { font: 600 10px/1 var(--sans); white-space: nowrap; width: auto !important; height: auto !important; pointer-events: none; text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff; }
+.avlbl.nav { color: #1d4e9e; transform: translate(6px, -50%); }
+.avlbl.awy { color: #3b6fb5; font-weight: 500; font-size: 9.5px; transform: translate(-50%, -50%); }
+.avlbl.fix { color: #111; font-size: 11px; transform: translate(7px, -120%); }

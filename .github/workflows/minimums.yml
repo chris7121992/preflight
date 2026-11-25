@@ -45,6 +45,7 @@ jobs:
             node scripts/minimums.js ${{ inputs.force && '--force' || '' }}
           fi
           node scripts/procedures.js ${{ inputs.force && '--force' || '' }}
+          node scripts/chartdata.js
 
       - name: Commit and redeploy
         env:
