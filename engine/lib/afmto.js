@@ -38,8 +38,8 @@ function inAlt(block, weightLb, tempC, headKt) {
   const [i0, i1, f] = bracket(ws, weightLb); // lighter than the lightest table is held at that table
   return mix(inTable(block[ws[i0]], tempC, headKt), inTable(block[ws[i1]], tempC, headKt), f);
 }
-function lookup(flaps, { weightLb, tempC, elevFt, headKt, antiIce }) {
-  const cfg = T.cfg[antiIce ? `${flaps}ai` : flaps];
+function lookup(flaps, { weightLb, tempC, elevFt, headKt, antiIce, wet }) {
+  const cfg = T.cfg[`${flaps}${wet ? 'w' : ''}${antiIce ? 'ai' : ''}`];
   if (!cfg) return null;
   const alts = Object.keys(cfg).map(Number).sort((a, b) => a - b);
   if (elevFt > alts[alts.length - 1]) return null;
@@ -51,15 +51,15 @@ function lookup(flaps, { weightLb, tempC, elevFt, headKt, antiIce }) {
 }
 const MAX_TAILWIND = 10, MAX_WEIGHT = 20200;
 // Flaps 15 where the table gives an unshaded figure, otherwise flaps 7. antiIce uses the anti-ice on tables
-// (printed to 10°C). headKt is the headwind along the
+// (printed to 10°C); wet uses the wet runway tables. headKt is the headwind along the
 // runway (negative for a tailwind); more than 30 kt of headwind is taken as 30.
-function takeoff({ weightLb, tempC, elevFt, headKt = 0, antiIce = false }) {
+function takeoff({ weightLb, tempC, elevFt, headKt = 0, antiIce = false, wet = false }) {
   if (headKt < -MAX_TAILWIND) return { ft: null, reason: `a tailwind of more than ${MAX_TAILWIND} kt, the limit` };
   if (weightLb > MAX_WEIGHT) return { ft: null, reason: `above the ${MAX_WEIGHT.toLocaleString('en-US')} lb maximum in the tables` };
-  const q = { weightLb, tempC, elevFt, headKt: Math.min(30, headKt), antiIce };
+  const q = { weightLb, tempC, elevFt, headKt: Math.min(30, headKt), antiIce, wet };
   const a = lookup(15, q), b = lookup(7, q);
   const pick = a && !a.shaded ? a : b && !b.shaded ? b : a || b;
   if (!pick) return { ft: null, reason: 'beyond the limits of the AFM takeoff tables at this weight, temperature and elevation' };
   return pick;
 }
-module.exports = { takeoff, hasAntiIce: !!T.cfg['15ai'], SOURCE: T.source };
+module.exports = { takeoff, hasAntiIce: !!T.cfg['15ai'], hasWet: !!T.cfg['15w'], SOURCE: T.source };

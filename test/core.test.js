@@ -424,3 +424,18 @@ test('risk score: compounding and saturation', () => {
   const worst = risk.assess(brief(st({ judged: { ceiling: 200, vis: 0.5, spd: 20, gust: 38, flags: { thunder: true, heavyRain: true }, llws: true }, runway: { id: '18', len: 4000, head: -9, crossG: 24, requiredFt: 4000, marginFt: 0 } })));
   assert.ok(worst.score > 85 && worst.score <= 100 && worst.level === 'severe');
 });
+
+test('AFM takeoff tables: wet runway', () => {
+  const afmto = require('../engine/lib/afmto');
+  assert.ok(afmto.hasWet);
+  // light and cold: the wet figure is well above the dry one, at a lower or equal V1
+  const q = { weightLb: 16000, tempC: 5, elevFt: 0, headKt: 0 };
+  const dry = afmto.takeoff(q), wet = afmto.takeoff({ ...q, wet: true });
+  assert.ok(wet.ft > dry.ft * 1.3 && wet.ft < dry.ft * 1.7, JSON.stringify([dry, wet]));
+  assert.ok(wet.v1 <= dry.v1);
+  // a printed wet figure comes back as printed (flaps 15, sea level, 13,500 lb, 40 C, zero wind)
+  const p = afmto.takeoff({ weightLb: 13500, tempC: 40, elevFt: 0, headKt: 0, wet: true });
+  assert.equal(p.ft, 3900); assert.equal(p.v1, 80);
+  // wet with anti-ice on
+  assert.ok(afmto.takeoff({ ...q, wet: true, antiIce: true }).ft > dry.ft);
+});
