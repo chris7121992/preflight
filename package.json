@@ -4,7 +4,7 @@
   "description": "Advisory preflight weather briefing for the Citation XLS+: ForeFlight flight plan upload, live AWC/WPC data, surface analysis interpretation and go/no-go screening.",
   "main": "server.js",
   "scripts": {
-    "build": "npx -y esbuild@0.25.0 engine/lib/browser.js --bundle --format=iife --target=es2020 --outfile=public/engine.js --log-level=warning",
+    "build": "node scripts/check-pages.js && npx -y esbuild@0.25.0 engine/lib/browser.js --bundle --format=iife --target=es2020 --outfile=public/engine.js --log-level=warning",
     "snapshot": "node scripts/snapshot.js",
     "start": "npm run build && node scripts/snapshot.js && node server.js",
     "test": "node --test test/*.test.js"
