@@ -9,6 +9,7 @@ function bracket(list, x) {
   if (x <= list[0]) return [0, 0, 0];
   if (x >= list[list.length - 1]) return [list.length - 1, list.length - 1, 0];
   const j = list.findIndex((v) => v >= x);
+  if (list[j] === x) return [j, j, 0]; // on a printed value: use it alone
   return [j - 1, j, (x - list[j - 1]) / (list[j] - list[j - 1])];
 }
 const mix = (a, b, f) => (a == null || b == null ? null : a + (b - a) * f);

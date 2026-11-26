@@ -606,14 +606,21 @@ async function buildBriefing(plan, input) {
     // Takeoff from the AFM tables with the wind along the chosen runway, V1, VR and V2 (not when a runway analysis gives the distance)
     if (field && field.kind === 'takeoff' && !(field.ra && field.ra.distFt)) {
       const head = rw && !rw.none && isFinite(rw.head) ? rw.head : 0, n = (x) => x.toLocaleString('en-US');
-      const a = afmto.takeoff({ weightLb: field.weightLb, tempC: field.tempC, elevFt: field.elevFt, headKt: head });
+      // engine anti-ice is on for takeoff at 10°C or colder in visible moisture: use the anti-ice on tables then
+      const mf = (cond && cond.flags) || {};
+      const moist = !!(mf.rain || mf.heavyRain || mf.snow || mf.drizzle || mf.showers || mf.fog || mf.freezingPrecip || mf.thunder || (cond && cond.vis != null && cond.vis < 1) || (cond && cond.ceiling != null && cond.ceiling < 1000));
+      const antiIce = afmto.hasAntiIce && field.tempC <= 10 && moist;
+      let a = afmto.takeoff({ weightLb: field.weightLb, tempC: field.tempC, elevFt: field.elevFt, headKt: head, antiIce });
+      const aiUsed = antiIce && a.ft != null;
+      if (antiIce && !aiUsed) a = afmto.takeoff({ weightLb: field.weightLb, tempC: field.tempC, elevFt: field.elevFt, headKt: head });
       if (a.ft != null) {
-        const still = head ? afmto.takeoff({ weightLb: field.weightLb, tempC: field.tempC, elevFt: field.elevFt, headKt: 0 }) : a;
-        field.afm = { ft: a.ft, zeroWindFt: still.ft, headKt: head, shaded: a.shaded, fpgFt: field.actualFt, unverified: true };
+        const still = head ? afmto.takeoff({ weightLb: field.weightLb, tempC: field.tempC, elevFt: field.elevFt, headKt: 0, antiIce: aiUsed }) : a;
+        field.afm = { ft: a.ft, zeroWindFt: still.ft, headKt: head, shaded: a.shaded, fpgFt: field.actualFt, antiIce: aiUsed };
+        field.antiIce = aiUsed;
         field.actualFt = field.requiredFt = a.ft; field.flaps = a.flaps; field.reason = null;
         if (a.v1 && a.vr && a.v2) field.speeds = { v1: a.v1, vr: a.vr, v2: a.v2 };
         const windTxt = !rw || rw.none ? 'zero wind' : head > 0 ? `${Math.min(30, head)} kt headwind on runway ${rw.id}` : head < 0 ? `${-head} kt tailwind on runway ${rw.id}` : `no headwind on runway ${rw.id}`;
-        field.basis = `Takeoff field length from the AFM tables (read by machine from the scanned pages), flaps ${a.flaps} at ${n(field.weightLb)} lb${field.assumedWeight ? ' (maximum takeoff weight assumed)' : ' (ForeFlight)'}, ${field.tempC}°C (${field.tempFrom}), ${n(field.elevFt)} ft elevation, ${windTxt}; dry runway, anti-ice off${field.speeds ? `; V1 ${a.v1}, VR ${a.vr}, V2 ${a.v2} KIAS` : ''}${still.ft && still.ft !== a.ft ? `; ${n(still.ft)} ft in zero wind` : ''}`;
+        field.basis = `Takeoff field length from the AFM tables (read by machine from the scanned pages), flaps ${a.flaps} at ${n(field.weightLb)} lb${field.assumedWeight ? ' (maximum takeoff weight assumed)' : ' (ForeFlight)'}, ${field.tempC}°C (${field.tempFrom}), ${n(field.elevFt)} ft elevation, ${windTxt}; dry runway, ${aiUsed ? `anti-ice on (${field.tempC}°C with visible moisture expected)` : 'anti-ice off'}${field.speeds ? `; V1 ${a.v1}, VR ${a.vr}, V2 ${a.v2} KIAS` : ''}${still.ft && still.ft !== a.ft ? `; ${n(still.ft)} ft in zero wind` : ''}`;
         if (a.shaded) add('caution', 'Performance', `${id}: the AFM takeoff table is shaded at this weight`, `At ${n(field.weightLb)} lb, ${field.tempC}°C and ${n(field.elevFt)} ft with ${windTxt}, the AFM takeoff field length table shades the figure (${n(a.ft)} ft, flaps ${a.flaps}). Shaded conditions carry a further limit in the AFM, so the allowable takeoff weight may be lower than planned: check the AFM maximum takeoff weight tables or run a ForeFlight Runway Analysis.`, id);
       }
     }
@@ -650,7 +657,7 @@ async function buildBriefing(plan, input) {
     station.windUsed = windSrc;
     const wetFlags = (cond && cond.flags) || {};
     const wet = !!(wetFlags.rain || wetFlags.heavyRain || wetFlags.snow || wetFlags.freezingPrecip || wetFlags.thunder || wetFlags.drizzle || wetFlags.showers);
-    const caveat = field && field.ra && field.ra.distFt ? `${field.basis}. Confirm the analysis used the current weight, weather and runway condition; the AFM governs.` : `${field ? field.basis + '. ' : ''}The tables do not cover wet or contaminated runways, slope${field && field.afm ? '' : ', wind'} or anti-ice on${wet ? ', and precipitation is forecast here' : ''}; the AFM governs.`;
+    const caveat = field && field.ra && field.ra.distFt ? `${field.basis}. Confirm the analysis used the current weight, weather and runway condition; the AFM governs.` : `${field ? field.basis + '. ' : ''}The tables do not cover wet or contaminated runways, ${field && field.afm ? (field.antiIce ? 'or slope' : 'slope or anti-ice on') : 'slope, wind or anti-ice on'}${wet ? ', and precipitation is forecast here' : ''}; the AFM governs.`;
     if (field && field.requiredFt == null) add(field.assumedWeight ? 'caution' : 'nogo', 'Performance', `${id}: ${field.kind} not covered at this weight and temperature`, `${field.kind === 'takeoff' ? 'Takeoff' : 'Landing'} at ${field.weightLb.toLocaleString('en-US')} lb, ${field.tempC}°C and ${field.elevFt.toLocaleString('en-US')} ft is ${field.reason}. ${field.kind === 'takeoff' ? 'Reduce the takeoff weight or depart when it is cooler.' : 'Reduce the landing weight.'} ${field.assumedWeight ? `The maximum ${field.kind} weight was assumed; upload the ForeFlight briefing to use the planned weight. ` : ''}Check the AFM.`, id);
     if (field && field.ra && field.kind === 'takeoff') {
       const r = field.ra, n = (x) => x.toLocaleString('en-US');

@@ -388,3 +388,18 @@ test('AFM landing tables: wind and approach speed', () => {
     assert.ok(still.vapp > still.vref && still.vref === fp.landing(q).vref);
   }
 });
+
+test('AFM takeoff tables: anti-ice on', () => {
+  const afmto = require('../engine/lib/afmto');
+  const q = { weightLb: 19000, tempC: 5, elevFt: 5000, headKt: 0 };
+  const off = afmto.takeoff(q), on = afmto.takeoff({ ...q, antiIce: true });
+  assert.ok(on.ft >= off.ft && on.ft < off.ft * 1.3);
+  assert.equal(afmto.takeoff({ ...q, tempC: 15, antiIce: true }).ft, null); // the anti-ice on tables stop at 10 C
+});
+
+test('AFM takeoff tables: a printed value is used alone', () => {
+  const afmto = require('../engine/lib/afmto');
+  // zero wind must not pick up the shading or blanks of the tailwind column beside it
+  const r = afmto.takeoff({ weightLb: 20200, tempC: 5, elevFt: 8000, headKt: 0 });
+  assert.equal(r.flaps, 15); assert.equal(r.ft, 5180); assert.equal(r.shaded, false);
+});
