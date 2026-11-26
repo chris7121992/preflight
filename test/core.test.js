@@ -463,3 +463,10 @@ test('MEL: deferred items limit the flight by their provisos', () => {
   assert.ok(run(['28-41-02'], { eteMin: 200 }).f.some((x) => x.level === 'nogo'));
   assert.deepStrictEqual(run(['25-10-06']).f.map((x) => x.level), ['info']);
 });
+
+test('page scripts parse', () => {
+  // a syntax error in any of these stops the whole page, uploads included
+  const { execFileSync } = require('node:child_process'), path = require('node:path'), fs = require('node:fs');
+  const dir = path.join(__dirname, '..', 'public');
+  for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.js') && x !== 'engine.js')) execFileSync(process.execPath, ['--check', path.join(dir, f)], { stdio: 'pipe' });
+});
