@@ -11,6 +11,7 @@ const simradar = require('./simradar');
 const fuelLib = require('./fuel');
 const fieldperf = require('./fieldperf');
 const afmto = require('./afmto');
+const afmld = require('./afmld');
 const ffrunway = require('./ffrunway');
 const perfLib = require('./perf');
 const nwp = require('./nwp');
@@ -520,7 +521,7 @@ async function buildBriefing(plan, input) {
     const ns = notamState(id, win[0], win[1]);
     const openApt = apt && ns.closedRwy.length ? { ...apt, runways: (apt.runways || []).filter((r) => !ns.closedRwy.some((it) => notam.sameRunway(it.name, r.id))) } : apt;
     // Runway length required, from the Flight Planning Guide tables at this weight, temperature and elevation
-    let field = null;
+    let field = null, mkLanding = null, setBasis = null;
     if (station.elev != null) {
       const elevFt = Math.round(station.elev * 3.28084);
       const mt = mods.map((m) => m.temp).filter((x) => x != null).sort((a, b) => a - b);
@@ -544,9 +545,14 @@ async function buildBriefing(plan, input) {
           if (raT.mtowLb && opts.towLb) field.ra.overMtowLb = opts.towLb > raT.mtowLb ? opts.towLb - raT.mtowLb : 0;
         }
       } else {
+        mkLanding = (headKt) => {
         const assumed = !opts.ldwLb, w = Math.min(opts.ldwLb || perfLib.LIMITS.maxLandingLb, perfLib.LIMITS.maxLandingLb);
         const l = fieldperf.landing({ weightLb: w, tempC, elevFt });
         const fpgFt = l.ft;
+        // AFM landing tables: VAPP, and the wind along the runway once the runway is chosen
+        const al = afmld.landing({ weightLb: w, tempC, elevFt, headKt });
+        let afm = null;
+        if (headKt && al.ft != null && l.ft != null && !raL) { afm = { ft: al.ft, zeroWindFt: l.ft, headKt, unverified: true }; l.ft = al.ft; }
         // the analysis figure back to an unfactored distance, whatever factor ForeFlight applied to it
         if (raL) { l.ft = Math.round(raL.factor === '60' ? raL.distFt * 0.6 : raL.factor === '80' ? raL.distFt * 0.8 : raL.distFt); l.reason = null; if (raL.vref) l.vref = raL.vref; }
         // Part 135 turbojets must be able to land within 60% of the runway (135.385(b), 135.387(a)); an eligible
@@ -568,6 +574,7 @@ async function buildBriefing(plan, input) {
           if (raL) { field.part135.ra = true; field.part135.raWet = !!raL.wet; }
         }
         if (raL) field.ra = { ...raL, fpgFt };
+        field.vapp = al.vapp; if (afm) field.afm = afm;
         // AFM advisory wet runway landing distance from the dry distance (not when the analysis figure is already wet)
         const afmWet = l.ft != null && !(raL && raL.wet) ? fieldperf.wetLanding(l.ft) : null;
         if (afmWet) {
@@ -575,9 +582,14 @@ async function buildBriefing(plan, input) {
           // Part 91 has no landing factor, so with a wet runway expected the AFM wet distance is the figure to meet
           if (wetRwy && opts.rules !== '135') { field.requiredFt = afmWet.vrefFt; field.wetApplied = true; }
         }
+        };
+        mkLanding(0);
       }
-      if (field.ra && field.ra.distFt) field.basis = `${field.kind === 'takeoff' ? `Takeoff distance required${field.ra.flaps != null ? `, flaps ${field.ra.flaps}` : ''}` : `Landing distance (${field.ra.factor === 'actual' ? 'unfactored' : `entered with the ${field.ra.factor}% factor`})`} from your ForeFlight Runway Analysis${field.ra.runway ? ` for runway ${field.ra.runway}` : ''}${field.ra.wet ? ', wet runway' : ''}${opts.ra.source ? ` (${opts.ra.source})` : ''}: ${field.ra.distFt.toLocaleString('en-US')} ft, at the weight, wind, temperature and runway condition set in ForeFlight`;
-      else field.basis = `${field.kind === 'takeoff' ? `Takeoff field length, flaps ${field.flaps ?? 15}` : 'Landing distance'} at ${field.weightLb.toLocaleString('en-US')} lb${field.assumedWeight ? ` (maximum ${field.kind} weight assumed)` : ' (ForeFlight)'}, ${tempC}°C (${tempFrom}), ${elevFt.toLocaleString('en-US')} ft elevation; dry runway, zero wind`;
+      setBasis = () => {
+        if (field.ra && field.ra.distFt) field.basis = `${field.kind === 'takeoff' ? `Takeoff distance required${field.ra.flaps != null ? `, flaps ${field.ra.flaps}` : ''}` : `Landing distance (${field.ra.factor === 'actual' ? 'unfactored' : `entered with the ${field.ra.factor}% factor`})`} from your ForeFlight Runway Analysis${field.ra.runway ? ` for runway ${field.ra.runway}` : ''}${field.ra.wet ? ', wet runway' : ''}${opts.ra.source ? ` (${opts.ra.source})` : ''}: ${field.ra.distFt.toLocaleString('en-US')} ft, at the weight, wind, temperature and runway condition set in ForeFlight`;
+        else field.basis = `${field.kind === 'takeoff' ? `Takeoff field length, flaps ${field.flaps ?? 15}` : 'Landing distance'} at ${field.weightLb.toLocaleString('en-US')} lb${field.assumedWeight ? ` (maximum ${field.kind} weight assumed)` : ' (ForeFlight)'}, ${tempC}°C (${tempFrom}), ${elevFt.toLocaleString('en-US')} ft elevation; dry runway, ${field.afm ? `${field.afm.headKt > 0 ? `${Math.min(30, field.afm.headKt)} kt headwind` : `${-field.afm.headKt} kt tailwind`} from the AFM landing tables (read by machine from the scanned pages, not yet double checked; ${field.afm.zeroWindFt.toLocaleString('en-US')} ft in zero wind)` : 'zero wind'}`;
+      };
+      setBasis();
       station.field = field;
     }
     const floorFt = Math.max(opts.minRunwayFt || 0, field && field.requiredFt ? field.requiredFt : opts.minRunwayFt ? 0 : CE56X.minRunwayFt);
@@ -588,6 +600,9 @@ async function buildBriefing(plan, input) {
       const wb = bestRunway(openApt, windSrc, { ...opts, minRunwayFt: floorFt });
       if (wb && !wb.none && wb.id !== rw.id && (rw.head < 0 || rw.crossG - wb.crossG >= 5)) add(rw.head < 0 ? 'caution' : 'info', 'Runway', `${id}: the wind favours runway ${wb.id} over the analysed runway ${rw.id}`, `The runway analysis is for runway ${rw.id} (${rw.head < 0 ? 'tailwind' : 'headwind'} ${Math.abs(rw.head)} kt, crosswind ${rw.crossG} kt with the wind used here); runway ${wb.id} has ${wb.head < 0 ? 'tailwind' : 'headwind'} ${Math.abs(wb.head)} kt and crosswind ${wb.crossG} kt. If you expect ${wb.id}, run the analysis for it.`, id);
     }
+    // Landing again with the wind along the chosen runway, from the AFM landing tables. A tailwind always counts;
+    // a headwind is credited under Part 91 only, so the Part 135 factored figures stay on the still-air distance.
+    if (mkLanding && rw && !rw.none && isFinite(rw.head) && rw.head >= -10 && (rw.head < 0 || (rw.head > 0 && opts.rules !== '135'))) { mkLanding(rw.head); setBasis(); station.field = field; }
     // Takeoff from the AFM tables with the wind along the chosen runway, V1, VR and V2 (not when a runway analysis gives the distance)
     if (field && field.kind === 'takeoff' && !(field.ra && field.ra.distFt)) {
       const head = rw && !rw.none && isFinite(rw.head) ? rw.head : 0, n = (x) => x.toLocaleString('en-US');

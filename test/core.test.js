@@ -375,3 +375,16 @@ test('AFM takeoff tables: wind, speeds and limits', () => {
   assert.equal(afmto.takeoff({ ...q, headKt: -11 }).ft, null);
   assert.equal(afmto.takeoff({ weightLb: 20200, tempC: 45, elevFt: 9000, headKt: 0 }).ft, null);
 });
+
+test('AFM landing tables: wind and approach speed', () => {
+  const afmld = require('../engine/lib/afmld');
+  const fp = require('../engine/lib/fieldperf');
+  for (const q of [{ weightLb: 18700, tempC: 15, elevFt: 0 }, { weightLb: 17000, tempC: 20, elevFt: 5000 }, { weightLb: 16300, tempC: 8, elevFt: 2400 }]) {
+    const still = afmld.landing({ ...q, headKt: 0 });
+    assert.ok(Math.abs(still.ft - fp.landing(q).ft) <= 10); // zero wind agrees with the Flight Planning Guide
+    assert.ok(afmld.landing({ ...q, headKt: 10 }).ft < still.ft);
+    assert.ok(afmld.landing({ ...q, headKt: -10 }).ft > still.ft);
+    assert.equal(afmld.landing({ ...q, headKt: -12 }).ft, null);
+    assert.ok(still.vapp > still.vref && still.vref === fp.landing(q).vref);
+  }
+});
