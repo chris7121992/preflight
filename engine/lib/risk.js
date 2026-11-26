@@ -11,7 +11,8 @@
 //     and alternate together ...) add a compounding term sized by the geometric mean of the two severities,
 //     so it only matters when both are present.
 //  4. What drives the score is found by removing each hazard in turn and scoring again.
-// The weights are judgement, set so that single ordinary cautions land in "moderate" and a no-go item in "high".
+// The weights are judgement, set so that a day of ordinary cautions lands in "moderate" or "high" and a no-go item in "severe".
+// Bands: under 20 low, under 45 moderate, under 70 high, 70 and over severe.
 
 const sig = (x) => 1 / (1 + Math.exp(-x));
 const clamp = (x) => Math.max(0, Math.min(1, x));
@@ -40,7 +41,7 @@ const CATS = {
 };
 // findings that only raise the floor of a hazard measured directly at a terminal
 const FLOOR = { 'Ceiling/Vis': 'lowwx', Crosswind: 'xwind', Tailwind: 'tailwind', Runway: 'runway', Performance: 'runway' };
-const LEVEL_S = { nogo: 0.97, caution: 0.55 };
+const LEVEL_S = { nogo: 0.97, caution: 0.45 };
 
 // pairs that compound: [type a, type b, strength, same terminal only, label]
 const PAIRS = [
@@ -123,7 +124,7 @@ function assess(b) {
   for (const [cat, list] of Object.entries(byCat)) {
     const [w, phase] = CATS[cat] || [0.2, 'Flight'];
     // several findings of one kind count more than one, with diminishing effect
-    const worst = Math.max(...list.map((x) => LEVEL_S[x.level])), s = 1 - (1 - worst) * Math.pow(0.8, list.length - 1);
+    const worst = Math.max(...list.map((x) => LEVEL_S[x.level])), raw = 1 - (1 - worst) * Math.pow(0.9, list.length - 1), s = worst < 0.9 ? Math.min(0.7, raw) : raw; // cautions alone stop at 0.7
     const top = list.find((x) => LEVEL_S[x.level] === worst);
     put(cat, '', phase || 'Flight', list.length > 1 ? `${top.title} (and ${list.length - 1} more ${cat.toLowerCase()} item${list.length > 2 ? 's' : ''})` : top.title, s, w);
   }
@@ -178,7 +179,7 @@ function assess(b) {
   }
   let total = score(null);
   const nogo = b.decision && b.decision.verdict === 'NO-GO';
-  if (nogo) total = Math.max(total, 60); // a limit is exceeded: always in the top band
+  if (nogo) total = Math.max(total, 70); // a limit is exceeded: always in the top band
   const alone = (h) => 100 * h.w * h.s;
   const drivers = H.filter((h) => !fuelDup(h)).map((h) => ({ label: h.label, phase: h.phase, where: h.where, type: h.type, severity: Math.round(h.s * 100), alone: Math.round(alone(h)), effect: Math.round((score(null) - score(h.key)) * 10) / 10 }))
     .filter((d) => d.effect >= 0.5).sort((x, y) => y.effect - x.effect);
@@ -190,7 +191,7 @@ function assess(b) {
     return { name, score: Math.round(100 * (1 - hs.reduce((k, h) => k * (1 - h.w * h.s), 1))), items: hs.length };
   }).filter((p) => p.items);
   const rounded = Math.round(total);
-  const level = rounded < 15 ? 'low' : rounded < 35 ? 'moderate' : rounded < 60 ? 'high' : 'severe';
+  const level = rounded < 20 ? 'low' : rounded < 45 ? 'moderate' : rounded < 70 ? 'high' : 'severe';
   const top = drivers[0];
   return {
     score: rounded, level, baseScore: Math.round(base), compoundingAdds: Math.max(0, Math.round(score(null) - base)),

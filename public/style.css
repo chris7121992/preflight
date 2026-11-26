@@ -245,7 +245,7 @@ h2.sub { margin-top: 18px; }
 .rscore { font: 800 34px var(--sans); min-width: 78px; text-align: center; padding: 10px 8px; border-radius: 12px; color: #fff; }
 .rscore.go { background: var(--go); } .rscore.info { background: var(--info); } .rscore.caution { background: var(--caution); } .rscore.nogo { background: var(--nogo); }
 .rlevel { font: 700 15px var(--sans); letter-spacing: .04em; }
-.rmeter { position: relative; height: 8px; border-radius: 4px; margin: 8px 0 4px; min-width: 220px; background: linear-gradient(90deg, var(--go) 0 15%, var(--info) 15% 35%, var(--caution) 35% 60%, var(--nogo) 60% 100%); }
+.rmeter { position: relative; height: 8px; border-radius: 4px; margin: 8px 0 4px; min-width: 220px; background: linear-gradient(90deg, var(--go) 0 20%, var(--info) 20% 45%, var(--caution) 45% 70%, var(--nogo) 70% 100%); }
 .rmark { position: absolute; top: -4px; width: 4px; height: 16px; margin-left: -2px; border-radius: 2px; background: var(--ink); outline: 2px solid var(--card); }
 .rphases { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 14px 0 4px; }
 .rphase .k { font-size: 12px; color: var(--muted); } .rphase .v { font: 700 14px var(--sans); }
