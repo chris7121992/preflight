@@ -59,7 +59,22 @@ function landing({ weightLb, tempC, elevFt }) {
   const [w0, w1, wf] = bracket(ws, weightLb);
   return { ...r, vref: Math.round(lerp(wf, 0, 1, vr[w0], vr[w1])) };
 }
+// Landing distance on a wet runway from the dry distance: AFM Section IV advisory data for wet runways
+// (Figure 4-550-2, with thrust reversers; not FAA approved). Columns: dry, wet at VREF, wet at VREF + 10 kt.
+const WET = (() => {
+  const head = [[1600, 1900, 2200], [1800, 2100, 2450], [2000, 2350, 2700], [2200, 2600, 2950], [2400, 2850, 3250], [2600, 3100, 3500], [2800, 3300, 3750], [3000, 3550, 4000], [3200, 3750, 4250], [3400, 4000, 4500], [3600, 4200, 4750], [3800, 4450, 5000], [4000, 4650, 5250], [4200, 4900, 5500], [4400, 5150, 5750], [4600, 5400, 6000], [4800, 5650, 6250]];
+  // from 5000 ft dry the table rises 200 ft per 200 ft in both columns, to 9800 ft dry
+  for (let d = 5000; d <= 9800; d += 200) head.push([d, 5850 + (d - 5000), 6450 + (d - 5000)]);
+  return head;
+})();
+function wetLanding(dryFt) {
+  if (dryFt == null || !isFinite(dryFt)) return null;
+  if (dryFt > WET[WET.length - 1][0]) return null;
+  const [i0, i1, fr] = bracket(WET.map((r) => r[0]), dryFt);
+  const up = (x) => Math.ceil(x / 10) * 10;
+  return { vrefFt: up(lerp(fr, 0, 1, WET[i0][1], WET[i1][1])), plus10Ft: up(lerp(fr, 0, 1, WET[i0][2], WET[i1][2])), source: 'AFM Section IV wet runway advisory data, Figure 4-550-2, with thrust reversers' };
+}
 // Standard temperature at an elevation, for when no temperature is known
 const isaC = (elevFt) => 15 - 1.98 * (elevFt / 1000);
 
-module.exports = { takeoff, landing, isaC, SOURCE: T.source };
+module.exports = { takeoff, landing, wetLanding, isaC, SOURCE: T.source };

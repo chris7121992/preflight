@@ -350,3 +350,13 @@ test('ForeFlight Runway Analysis: figures are read from labelled text and cleane
   assert.equal(c.takeoff.distFt, 4620); assert.equal(c.takeoff.runway, '04L'); assert.equal(c.landing, null);
   assert.equal(clean({ takeoff: {}, landing: {} }), null);
 });
+
+test('AFM wet runway landing distance is read from the dry distance', () => {
+  const { wetLanding } = require('../engine/lib/fieldperf');
+  assert.deepEqual([wetLanding(3200).vrefFt, wetLanding(3200).plus10Ft], [3750, 4250]);
+  assert.deepEqual([wetLanding(9800).vrefFt, wetLanding(9800).plus10Ft], [10650, 11250]);
+  assert.deepEqual([wetLanding(7000).vrefFt, wetLanding(7000).plus10Ft], [7850, 8450]);
+  assert.equal(wetLanding(3100).vrefFt, 3650);
+  assert.equal(wetLanding(1200).vrefFt, 1900);
+  assert.equal(wetLanding(12000), null);
+});

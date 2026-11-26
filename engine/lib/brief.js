@@ -567,6 +567,13 @@ async function buildBriefing(plan, input) {
           if (raL) { field.part135.ra = true; field.part135.raWet = !!raL.wet; }
         }
         if (raL) field.ra = { ...raL, fpgFt };
+        // AFM advisory wet runway landing distance from the dry distance (not when the analysis figure is already wet)
+        const afmWet = l.ft != null && !(raL && raL.wet) ? fieldperf.wetLanding(l.ft) : null;
+        if (afmWet) {
+          field.wet = { ...afmWet, expected: wetRwy };
+          // Part 91 has no landing factor, so with a wet runway expected the AFM wet distance is the figure to meet
+          if (wetRwy && opts.rules !== '135') { field.requiredFt = afmWet.vrefFt; field.wetApplied = true; }
+        }
       }
       if (field.ra && field.ra.distFt) field.basis = `${field.kind === 'takeoff' ? `Takeoff distance required${field.ra.flaps != null ? `, flaps ${field.ra.flaps}` : ''}` : `Landing distance (${field.ra.factor === 'actual' ? 'unfactored' : `entered with the ${field.ra.factor}% factor`})`} from your ForeFlight Runway Analysis${field.ra.runway ? ` for runway ${field.ra.runway}` : ''}${field.ra.wet ? ', wet runway' : ''}${opts.ra.source ? ` (${opts.ra.source})` : ''}: ${field.ra.distFt.toLocaleString('en-US')} ft, at the weight, wind, temperature and runway condition set in ForeFlight`;
       else field.basis = `${field.kind === 'takeoff' ? `Takeoff field length, flaps ${field.flaps ?? 15}` : 'Landing distance'} at ${field.weightLb.toLocaleString('en-US')} lb${field.assumedWeight ? ` (maximum ${field.kind} weight assumed)` : ' (ForeFlight)'}, ${tempC}°C (${tempFrom}), ${elevFt.toLocaleString('en-US')} ft elevation; dry runway, zero wind`;
@@ -622,13 +629,17 @@ async function buildBriefing(plan, input) {
       else if (r.mtowLb) add('info', 'Performance', `${id}: runway analysis maximum takeoff weight ${n(r.mtowLb)} lb`, 'Upload the ForeFlight briefing as well to compare it with the planned takeoff weight.', id);
     }
     if (field && field.ra && field.ra.distFt && field.ra.fpgFt && Math.abs(field.actualFt - field.ra.fpgFt) / field.ra.fpgFt > 0.35) add('info', 'Performance', `${id}: runway analysis differs widely from the Flight Planning Guide`, `The Runway Analysis gives ${field.actualFt.toLocaleString('en-US')} ft ${field.kind === 'landing' ? 'unfactored ' : ''}against ${field.ra.fpgFt.toLocaleString('en-US')} ft from the Flight Planning Guide (dry, zero wind, ${field.weightLb.toLocaleString('en-US')} lb). Wind, a wet runway, slope or anti-ice can explain it; check the figure was read correctly.`, id);
+    if (field && field.wet && field.wet.expected) {
+      const n = (x) => x.toLocaleString('en-US'), w = field.wet, len = rw && !rw.none ? rw.len : null;
+      add(len != null && len < w.plus10Ft ? 'caution' : 'info', 'Performance', `${id}: wet runway landing distance ${n(w.vrefFt)} ft`, `Precipitation is expected, so the runway is likely wet. The AFM wet runway data gives ${n(w.vrefFt)} ft at VREF and ${n(w.plus10Ft)} ft at VREF + 10 kt, from a dry distance of ${n(field.actualFt)} ft${len != null ? `; runway ${rw.id} is ${n(len)} ft${len < w.plus10Ft && len >= w.vrefFt ? ', which does not cover a 10 kt overspeed' : ''}` : ''}. These figures assume thrust reversers, are advisory (not FAA approved) and the AFM calls them minimums. ${opts.rules === '135' ? 'The Part 135 limit is still the factored dry distance with the 115% wet allowance.' : 'This wet distance is the runway length checked here.'}`, id);
+    }
     if (field && field.overMax) add('caution', 'Performance', `${id}: planned takeoff weight is above the maximum`, `ForeFlight shows a takeoff weight above ${perfLib.LIMITS.maxTakeoffLb.toLocaleString('en-US')} lb; the field length below is for ${perfLib.LIMITS.maxTakeoffLb.toLocaleString('en-US')} lb.`, id);
     if (rw && rw.none) add('nogo', 'Runway', `${id}: no runway meets ${CE56X.absoluteMinRunwayFt} ft`, `Longest hard-surface runway in the database is ${rw.longestFt} ft.`, id);
     else if (rw) {
       if (field && field.requiredFt != null) {
         rw.requiredFt = field.requiredFt; rw.marginFt = rw.len - field.requiredFt;
         const p135 = field.kind === 'landing' && opts.rules === '135' ? field.part135 : null;
-        const what = field.kind === 'takeoff' ? 'takeoff field length' : p135 ? (p135.eod ? 'landing distance with the 80% eligible on-demand factor' : `landing distance with the 60% factor${p135.wet ? ' and the 115% wet runway allowance' : ''}`) : opts.rules === '135' ? 'landing distance with the 60% factor' : 'landing distance';
+        const what = field.kind === 'takeoff' ? 'takeoff field length' : field.wetApplied ? 'AFM wet runway landing distance' : p135 ? (p135.eod ? 'landing distance with the 80% eligible on-demand factor' : `landing distance with the 60% factor${p135.wet ? ' and the 115% wet runway allowance' : ''}`) : opts.rules === '135' ? 'landing distance with the 60% factor' : 'landing distance';
         if (p135) {
           // each option against the most suitable runway for the wind (b)(2) and the longest runway in still air (b)(1)
           const longest = Math.max(rw.len, rw.longestFt || 0), n = (x) => x.toLocaleString('en-US');
