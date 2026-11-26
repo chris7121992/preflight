@@ -4,7 +4,9 @@
 // allowances. ISA, zero wind, anti-ice off. The guide is not a substitute for the AFM; these tables are for
 // planning estimates only and are not corrected for temperature.
 const SOURCE = 'Cessna Citation XLS+ Flight Planning Guide (ISA, anti-ice off)';
-const LIMITS = { maxRampLb: 20400, maxTakeoffLb: 20200, maxLandingLb: 18700, maxZeroFuelLb: 15100, usableFuelLb: 6740, basicOperatingLb: 12800 };
+// Weights are those of the XLS Gen2 (serial 6322 and higher): 20,330 lb takeoff and 20,530 lb ramp. The earlier
+// XLS+ is 20,200 and 20,400 lb, and the performance tables stop at 20,200 lb (tableMaxTakeoffLb).
+const LIMITS = { maxRampLb: 20530, maxTakeoffLb: 20330, tableMaxTakeoffLb: 20200, maxLandingLb: 18700, maxZeroFuelLb: 15100, usableFuelLb: 6740, basicOperatingLb: 12800 };
 const W = [20200, 19000, 18000, 16000, 14000];
 // 250 KIAS / M 0.65 climb from sea level: altitude -> [minutes], [lb], [nm] by takeoff weight
 const CLIMB = {

@@ -533,9 +533,9 @@ async function buildBriefing(plan, input) {
       const raOther = opts.ra && ((role === 'departure' && opts.ra.takeoff && !raT && opts.ra.takeoff.airport) || (role === 'destination' && opts.ra.landing && !raL && opts.ra.landing.airport));
       if (raOther) add('caution', 'Performance', `${id}: the runway analysis is for ${raOther}, not this airport`, `The uploaded ForeFlight Runway Analysis ${role === 'departure' ? 'takeoff' : 'landing'} figures are for ${raOther}, so they were not used here; the Flight Planning Guide tables were used instead. Upload the analysis for this flight or correct the airport.`, id);
       if (role === 'departure') {
-        const assumed = !opts.towLb, w = Math.min(opts.towLb || perfLib.LIMITS.maxTakeoffLb, perfLib.LIMITS.maxTakeoffLb);
+        const assumed = !opts.towLb, tblMax = perfLib.LIMITS.tableMaxTakeoffLb, w = Math.min(opts.towLb || tblMax, tblMax);
         const t = fieldperf.takeoff({ weightLb: w, tempC, elevFt });
-        field = { kind: 'takeoff', weightLb: w, assumedWeight: assumed, overMax: !!(opts.towLb && opts.towLb > perfLib.LIMITS.maxTakeoffLb), tempC, tempFrom, elevFt, actualFt: t.ft, requiredFt: t.ft, flaps: t.flaps, reason: t.reason || null };
+        field = { kind: 'takeoff', weightLb: w, assumedWeight: assumed, overMax: !!(opts.towLb && opts.towLb > perfLib.LIMITS.maxTakeoffLb), aboveTables: opts.towLb && opts.towLb > tblMax ? opts.towLb : null, tempC, tempFrom, elevFt, actualFt: t.ft, requiredFt: t.ft, flaps: t.flaps, reason: t.reason || null };
         if (raT) {
           field.ra = { ...raT, fpgFt: t.ft };
           if (raT.distFt) { field.actualFt = field.requiredFt = raT.distFt; field.reason = null; }
@@ -633,7 +633,8 @@ async function buildBriefing(plan, input) {
       const n = (x) => x.toLocaleString('en-US'), w = field.wet, len = rw && !rw.none ? rw.len : null;
       add(len != null && len < w.plus10Ft ? 'caution' : 'info', 'Performance', `${id}: wet runway landing distance ${n(w.vrefFt)} ft`, `Precipitation is expected, so the runway is likely wet. The AFM wet runway data gives ${n(w.vrefFt)} ft at VREF and ${n(w.plus10Ft)} ft at VREF + 10 kt, from a dry distance of ${n(field.actualFt)} ft${len != null ? `; runway ${rw.id} is ${n(len)} ft${len < w.plus10Ft && len >= w.vrefFt ? ', which does not cover a 10 kt overspeed' : ''}` : ''}. These figures assume thrust reversers, are advisory (not FAA approved) and the AFM calls them minimums. ${opts.rules === '135' ? 'The Part 135 limit is still the factored dry distance with the 115% wet allowance.' : 'This wet distance is the runway length checked here.'}`, id);
     }
-    if (field && field.overMax) add('caution', 'Performance', `${id}: planned takeoff weight is above the maximum`, `ForeFlight shows a takeoff weight above ${perfLib.LIMITS.maxTakeoffLb.toLocaleString('en-US')} lb; the field length below is for ${perfLib.LIMITS.maxTakeoffLb.toLocaleString('en-US')} lb.`, id);
+    if (field && field.aboveTables && !field.overMax && !(field.ra && field.ra.distFt)) add('caution', 'Performance', `${id}: takeoff weight is above the performance tables`, `ForeFlight plans ${field.aboveTables.toLocaleString('en-US')} lb, within the XLS Gen2 maximum of ${perfLib.LIMITS.maxTakeoffLb.toLocaleString('en-US')} lb but above the ${perfLib.LIMITS.tableMaxTakeoffLb.toLocaleString('en-US')} lb where the tables here stop. The field length shown is for ${perfLib.LIMITS.tableMaxTakeoffLb.toLocaleString('en-US')} lb, so the true figure is a little longer: use the Gen2 AFM data or upload your ForeFlight Runway Analysis.`, id);
+    if (field && field.overMax) add('caution', 'Performance', `${id}: planned takeoff weight is above the maximum`, `ForeFlight shows a takeoff weight above ${perfLib.LIMITS.maxTakeoffLb.toLocaleString('en-US')} lb; the field length below is for ${perfLib.LIMITS.tableMaxTakeoffLb.toLocaleString('en-US')} lb.`, id);
     if (rw && rw.none) add('nogo', 'Runway', `${id}: no runway meets ${CE56X.absoluteMinRunwayFt} ft`, `Longest hard-surface runway in the database is ${rw.longestFt} ft.`, id);
     else if (rw) {
       if (field && field.requiredFt != null) {
