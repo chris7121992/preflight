@@ -65,6 +65,7 @@
     L.push(`This will be a static takeoff with flaps ${f && f.flaps != null ? f.flaps : 15}${ai ? ', engine anti-ice on' : ', anti-ice off unless conditions change'}. For a rolling takeoff add 500 ft to the takeoff distance.`);
     if (f && f.requiredFt) L.push(`Takeoff distance required is ${n(f.requiredFt)} ft at ${n(f.weightLb)} lb${r ? `. Runway ${r.id} is ${n(r.len)} ft, ${n(Math.abs(r.len - f.requiredFt))} ft ${r.len >= f.requiredFt ? 'to spare' : 'short'}` : ''}.`);
     L.push(sp ? `Speeds: V 1 ${sp.v1}${sp.vr ? `, rotate ${sp.vr}` : ''}${sp.v2 ? `, V 2 ${sp.v2}` : ''}.` : 'Speeds: state V 1, V R and V 2 from the takeoff data.');
+    if (f && f.afm && f.speeds) L.push(ai ? 'The distance and speeds are from the anti-ice off tables: use the anti-ice on data for this takeoff.' : 'Confirm the speeds against your takeoff data.');
     if (dep) L.push(`${windTxt(dep.windUsed).replace(/^./, (c) => c.toUpperCase())}${r ? `, giving ${r.head >= 0 ? `a headwind of ${r.head}` : `a tailwind of ${-r.head}`} and a crosswind of ${r.crossG} kt` : ''}.`);
     L.push('I will set the thrust levers to the takeoff detent, and you verify takeoff power.');
     L.push('Call airspeed alive, 80 knots cross-check, V 1, rotate, positive rate, and V 2 plus 10.');

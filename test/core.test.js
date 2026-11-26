@@ -360,3 +360,18 @@ test('AFM wet runway landing distance is read from the dry distance', () => {
   assert.equal(wetLanding(1200).vrefFt, 1900);
   assert.equal(wetLanding(12000), null);
 });
+
+test('AFM takeoff tables: wind, speeds and limits', () => {
+  const afmto = require('../engine/lib/afmto');
+  const fp = require('../engine/lib/fieldperf');
+  const q = { weightLb: 20200, tempC: 15, elevFt: 0 };
+  const still = afmto.takeoff({ ...q, headKt: 0 });
+  assert.equal(still.ft, fp.takeoff(q).ft); // zero wind agrees with the Flight Planning Guide
+  assert.equal(still.flaps, 15);
+  assert.ok(still.v1 <= still.vr && still.vr < still.v2);
+  assert.ok(afmto.takeoff({ ...q, headKt: 10 }).ft < still.ft);
+  assert.ok(afmto.takeoff({ ...q, headKt: -10 }).ft > still.ft);
+  assert.equal(afmto.takeoff({ ...q, headKt: 50 }).ft, afmto.takeoff({ ...q, headKt: 30 }).ft);
+  assert.equal(afmto.takeoff({ ...q, headKt: -11 }).ft, null);
+  assert.equal(afmto.takeoff({ weightLb: 20200, tempC: 45, elevFt: 9000, headKt: 0 }).ft, null);
+});

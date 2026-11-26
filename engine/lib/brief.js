@@ -10,6 +10,7 @@ const sfcread = require('./sfcread');
 const simradar = require('./simradar');
 const fuelLib = require('./fuel');
 const fieldperf = require('./fieldperf');
+const afmto = require('./afmto');
 const ffrunway = require('./ffrunway');
 const perfLib = require('./perf');
 const nwp = require('./nwp');
@@ -587,6 +588,20 @@ async function buildBriefing(plan, input) {
       const wb = bestRunway(openApt, windSrc, { ...opts, minRunwayFt: floorFt });
       if (wb && !wb.none && wb.id !== rw.id && (rw.head < 0 || rw.crossG - wb.crossG >= 5)) add(rw.head < 0 ? 'caution' : 'info', 'Runway', `${id}: the wind favours runway ${wb.id} over the analysed runway ${rw.id}`, `The runway analysis is for runway ${rw.id} (${rw.head < 0 ? 'tailwind' : 'headwind'} ${Math.abs(rw.head)} kt, crosswind ${rw.crossG} kt with the wind used here); runway ${wb.id} has ${wb.head < 0 ? 'tailwind' : 'headwind'} ${Math.abs(wb.head)} kt and crosswind ${wb.crossG} kt. If you expect ${wb.id}, run the analysis for it.`, id);
     }
+    // Takeoff from the AFM tables with the wind along the chosen runway, V1, VR and V2 (not when a runway analysis gives the distance)
+    if (field && field.kind === 'takeoff' && !(field.ra && field.ra.distFt)) {
+      const head = rw && !rw.none && isFinite(rw.head) ? rw.head : 0, n = (x) => x.toLocaleString('en-US');
+      const a = afmto.takeoff({ weightLb: field.weightLb, tempC: field.tempC, elevFt: field.elevFt, headKt: head });
+      if (a.ft != null) {
+        const still = head ? afmto.takeoff({ weightLb: field.weightLb, tempC: field.tempC, elevFt: field.elevFt, headKt: 0 }) : a;
+        field.afm = { ft: a.ft, zeroWindFt: still.ft, headKt: head, shaded: a.shaded, fpgFt: field.actualFt, unverified: true };
+        field.actualFt = field.requiredFt = a.ft; field.flaps = a.flaps; field.reason = null;
+        if (a.v1 && a.vr && a.v2) field.speeds = { v1: a.v1, vr: a.vr, v2: a.v2 };
+        const windTxt = !rw || rw.none ? 'zero wind' : head > 0 ? `${Math.min(30, head)} kt headwind on runway ${rw.id}` : head < 0 ? `${-head} kt tailwind on runway ${rw.id}` : `no headwind on runway ${rw.id}`;
+        field.basis = `Takeoff field length from the AFM tables (read by machine from the scanned pages, not yet double checked), flaps ${a.flaps} at ${n(field.weightLb)} lb${field.assumedWeight ? ' (maximum takeoff weight assumed)' : ' (ForeFlight)'}, ${field.tempC}°C (${field.tempFrom}), ${n(field.elevFt)} ft elevation, ${windTxt}; dry runway, anti-ice off${field.speeds ? `; V1 ${a.v1}, VR ${a.vr}, V2 ${a.v2} KIAS` : ''}${still.ft && still.ft !== a.ft ? `; ${n(still.ft)} ft in zero wind` : ''}`;
+        if (a.shaded) add('caution', 'Performance', `${id}: the AFM takeoff table is shaded at this weight`, `At ${n(field.weightLb)} lb, ${field.tempC}°C and ${n(field.elevFt)} ft with ${windTxt}, the AFM takeoff field length table shades the figure (${n(a.ft)} ft, flaps ${a.flaps}). Shaded conditions carry a further limit in the AFM, so the allowable takeoff weight may be lower than planned: check the AFM maximum takeoff weight tables or run a ForeFlight Runway Analysis.`, id);
+      }
+    }
     if (pastedNotams) {
       station.notams = { count: (notamsBy[id] || []).length, closedRunways: ns.closedRwy.map((it) => it.name), closedTaxiways: [...new Set(ns.twy.map((it) => it.name))] };
       const tx = (n) => `${n.number || ''} ${n.summary}`.trim();
@@ -620,7 +635,7 @@ async function buildBriefing(plan, input) {
     station.windUsed = windSrc;
     const wetFlags = (cond && cond.flags) || {};
     const wet = !!(wetFlags.rain || wetFlags.heavyRain || wetFlags.snow || wetFlags.freezingPrecip || wetFlags.thunder || wetFlags.drizzle || wetFlags.showers);
-    const caveat = field && field.ra && field.ra.distFt ? `${field.basis}. Confirm the analysis used the current weight, weather and runway condition; the AFM governs.` : `${field ? field.basis + '. ' : ''}The tables do not cover wet or contaminated runways, slope, wind or anti-ice on${wet ? ', and precipitation is forecast here' : ''}; the AFM governs.`;
+    const caveat = field && field.ra && field.ra.distFt ? `${field.basis}. Confirm the analysis used the current weight, weather and runway condition; the AFM governs.` : `${field ? field.basis + '. ' : ''}The tables do not cover wet or contaminated runways, slope${field && field.afm ? '' : ', wind'} or anti-ice on${wet ? ', and precipitation is forecast here' : ''}; the AFM governs.`;
     if (field && field.requiredFt == null) add(field.assumedWeight ? 'caution' : 'nogo', 'Performance', `${id}: ${field.kind} not covered at this weight and temperature`, `${field.kind === 'takeoff' ? 'Takeoff' : 'Landing'} at ${field.weightLb.toLocaleString('en-US')} lb, ${field.tempC}°C and ${field.elevFt.toLocaleString('en-US')} ft is ${field.reason}. ${field.kind === 'takeoff' ? 'Reduce the takeoff weight or depart when it is cooler.' : 'Reduce the landing weight.'} ${field.assumedWeight ? `The maximum ${field.kind} weight was assumed; upload the ForeFlight briefing to use the planned weight. ` : ''}Check the AFM.`, id);
     if (field && field.ra && field.kind === 'takeoff') {
       const r = field.ra, n = (x) => x.toLocaleString('en-US');
