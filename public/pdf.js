@@ -76,7 +76,8 @@
     header(`page 1 of ${pages}`);
     y = 62;
     const vcol = d.verdict === 'GO' ? C.go : d.verdict === 'NO-GO' ? C.nogo : C.caution;
-    const reasons = [...d.reasoning.slice(0, b.risk ? 3 : 4), ...(b.risk ? [b.risk.summary + (b.risk.compoundingAdds ? ` Compounding between hazards adds ${b.risk.compoundingAdds} of those points.` : '')] : [])].map((r) => '- ' + clip(r, 330));
+    const melLine = b.mel && b.mel.items.length ? [`MEL: ${b.mel.items.filter((i) => !i.via).map((i) => i.short).join(', ')} deferred. ${b.mel.summary}`] : [];
+    const reasons = [...d.reasoning.slice(0, (b.risk ? 3 : 4) - melLine.length), ...melLine, ...(b.risk ? [b.risk.summary + (b.risk.compoundingAdds ? ` Compounding between hazards adds ${b.risk.compoundingAdds} of those points.` : '')] : [])].map((r) => '- ' + clip(r, 330));
     doc.setFont('helvetica', 'normal'); fs(7.2);
     const rl = doc.splitTextToSize(t(reasons.join('\n')), W - 2 * M - 150);
     const boxH = Math.max(46, rl.length * 7.2 * k * 1.22 + 26);

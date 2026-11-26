@@ -256,3 +256,10 @@ h2.sub { margin-top: 18px; }
 .rtable td { padding: 5px 8px 5px 0; border-top: 1px solid var(--line, rgba(128,128,128,.25)); vertical-align: middle; } .rtable td:nth-child(3) { width: 110px; } .rtable td:last-child { font-weight: 700; text-align: right; }
 .rlist { margin: 4px 0 0 18px; padding: 0; font-size: 13.5px; }
 @media (max-width: 560px) { .rtable td:nth-child(2), .rtable th:nth-child(2) { display: none; } .rhead { align-items: flex-start; } }
+
+.melchosen, .melresults { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; } .melresults { max-height: 340px; overflow-y: auto; }
+.melitem { display: flex; gap: 10px; align-items: flex-start; text-align: left; width: 100%; margin: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); color: var(--ink); font: inherit; font-size: 13.5px; cursor: pointer; }
+.melitem.on { cursor: default; border-left: 4px solid var(--info); } .melitem .hint { margin: 2px 0 0; }
+.melitem > button { flex: none; width: 26px; height: 26px; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--card); color: var(--ink); font-size: 16px; line-height: 1; cursor: pointer; }
+.mellim { display: inline-block; font: 600 11px var(--sans); padding: 1px 7px; border-radius: 5px; background: color-mix(in srgb, var(--caution) 22%, transparent); color: var(--ink); }
+#melCard .factor details { margin-top: 6px; padding-top: 6px; } #melCard .rlist { list-style: none; margin-left: 0; } #melCard .rlist li { margin: 3px 0; }

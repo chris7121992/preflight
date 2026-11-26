@@ -156,6 +156,7 @@ $('planForm').addEventListener('submit', async (e) => {
     etd: etdLocal ? new Date(etdLocal).toISOString() : null, rules: $('rules').value,
     destCircHaa: $('destCircHaa').value, destCircNa: $('destCircNa').checked, destHat: $('destHat').value, destVisMin: $('destVisMin').value,
     altNavFacilities: $('altNavFacilities').value, altHat: $('altHat').value, altVisMin: $('altVisMin').value, highMinsPic: $('highMinsPic').checked, eod80: !!($('eod80') && $('eod80').checked), sicLow: !!($('sicLow') && $('sicLow').checked), notamText: [notamFromFile, $('notamText').value].filter(Boolean).join('\n\n'), approachCat: $('approachCat').value, altGps: $('altGps').checked,
+    mel: melSelected(),
     maxXwind: $('maxXwind').value, maxTailwind: $('maxTailwind').value, minCeiling: $('minCeiling').value, minVis: $('minVis').value, minRunway: $('minRunway').value,
   };
   $('go').disabled = true;
@@ -184,7 +185,7 @@ function status(msg, err, busy) {
 
 // A phone can hold an older copy of the page while loading this newer script, so cards added since are
 // created here when the page does not have them, and one card failing never stops the rest.
-const LATER_CARDS = [['audioCard', 'audio', 'Audio briefing', 'Audio', 'mapCard'], ['riskCard', 'risk', 'Risk analysis', 'Risk', 'audioCard'], ['fuelCard', 'fuel', 'Fuel recommendation', 'Fuel', 'modelsCard'], ['simCard', 'simradar', 'Simulated radar for the flight', 'Sim radar', 'terminalsCard'], ['turbCard', 'turb', 'Turbulence by route and altitude', 'Turbulence', 'fuelCard']];
+const LATER_CARDS = [['audioCard', 'audio', 'Audio briefing', 'Audio', 'mapCard'], ['riskCard', 'risk', 'Risk analysis', 'Risk', 'audioCard'], ['melCard', 'mel', 'Deferred equipment (MEL)', 'MEL', 'audioCard'], ['fuelCard', 'fuel', 'Fuel recommendation', 'Fuel', 'modelsCard'], ['simCard', 'simradar', 'Simulated radar for the flight', 'Sim radar', 'terminalsCard'], ['turbCard', 'turb', 'Turbulence by route and altitude', 'Turbulence', 'fuelCard']];
 function ensureCards() {
   for (const [cardId, bodyId, title, tab, beforeId] of LATER_CARDS) {
     if ($(bodyId)) continue;
@@ -214,6 +215,63 @@ function renderRisk(b) {
     ${k.drivers.length ? `<h3>What drives the score</h3><table class="rtable"><tr><th>Hazard</th><th>Phase</th><th>Severity</th><th>Points</th></tr>${k.drivers.map((d) => `<tr><td>${esc(d.label)}</td><td>${esc(d.phase === 'Flight' ? 'Whole flight' : d.phase)}</td><td>${bar(d.severity, d.severity < 30 ? 'go' : d.severity < 60 ? 'caution' : 'nogo')}</td><td>${d.effect}</td></tr>`).join('')}</table>` : '<p class="hint">Nothing in the briefing raises the score.</p>'}
     ${k.compounding.length ? `<h3>Compounding</h3><ul class="rlist">${k.compounding.map((c) => `<li>${esc(c.label)} <span class="hint">(${c.strength})</span></li>`).join('')}</ul>` : ''}
     <p class="hint">Points are how far the score falls if that hazard is removed. ${esc(k.method)} It is recalculated from the current weather, NOTAMs, performance, fuel and crew inputs each time the briefing runs.</p>`;
+}
+// Deferred equipment (MEL): a picker on the flight form, kept on this device between flights, and a card in the results
+function melSelected() { try { return JSON.parse(localStorage.getItem('mel') || '[]').filter((x) => typeof x === 'string'); } catch (e) { return []; } }
+function melSave(ids) { try { localStorage.setItem('mel', JSON.stringify(ids)); } catch (e) { /* private mode */ } }
+(function melPicker() {
+  const go = $('go');
+  if (!go || $('melBox') || !window.PreflightEngine || !window.PreflightEngine.melList) return;
+  let all = [];
+  try { all = window.PreflightEngine.melList(); } catch (e) { return; }
+  const byId = new Map(all.map((i) => [i.id, i]));
+  const box = document.createElement('details');
+  box.id = 'melBox';
+  box.innerHTML = `<summary>Deferred equipment (MEL)<span id="melCount"></span></summary>
+    <p class="hint">Pick anything deferred on the aircraft. Each item's provisos from the FAA master MEL (560XL, Revision 9) are checked against the flight: icing, night, IMC, RVSM, altitude, precipitation, fuel and time limits. Your approved MEL governs.</p>
+    <div id="melChosen" class="melchosen"></div>
+    <input type="search" id="melSearch" placeholder="Search: anti-ice, autopilot, 30-20, radar, pressurization…" autocomplete="off" spellcheck="false">
+    <div id="melResults" class="melresults"></div>`;
+  go.parentNode.insertBefore(box, go);
+  const words = (i) => (i.limits.length ? `<span class="mellim">${esc(i.limits.join(', '))}</span>` : '');
+  const draw = () => {
+    const sel = melSelected().filter((id) => byId.has(id));
+    $('melCount').textContent = sel.length ? `: ${sel.length} selected` : '';
+    $('melChosen').innerHTML = sel.map((id) => { const i = byId.get(id); return `<div class="melitem on"><button type="button" data-rm="${esc(id)}" aria-label="Remove ${esc(i.short)}">×</button><div><b>${esc(i.short)}</b> <span class="hint">${esc(id)} · category ${esc(i.cat)}</span> ${words(i)}<div class="hint">${esc(i.remarks || 'No provisos in the master MEL.')}</div></div></div>`; }).join('');
+    const q = $('melSearch').value.trim().toLowerCase();
+    let hits = [];
+    if (q.length >= 2) {
+      const terms = q.split(/\s+/);
+      hits = all.filter((i) => !sel.includes(i.id) && terms.every((t) => (i.id + ' ' + i.item + ' ' + i.section + ' ' + i.limits.join(' ')).toLowerCase().includes(t))).slice(0, 40);
+    }
+    $('melResults').innerHTML = q.length < 2 ? '' : hits.length ? hits.map((i) => `<button type="button" class="melitem" data-add="${esc(i.id)}"><div><b>${esc(i.item)}</b> <span class="hint">${esc(i.id)} · ${esc(i.section)} · category ${esc(i.cat)}</span> ${words(i)}<div class="hint">${esc((i.remarks || 'No provisos in the master MEL.').slice(0, 220))}${i.remarks.length > 220 ? '…' : ''}</div></div></button>`).join('') : '<p class="hint">Nothing in the master MEL matches. Items with no relief are not listed: without relief the equipment must work.</p>';
+  };
+  box.addEventListener('click', (e) => {
+    const add = e.target.closest('[data-add]'), rm = e.target.closest('[data-rm]');
+    if (add) { melSave([...melSelected(), add.dataset.add]); $('melSearch').value = ''; draw(); }
+    if (rm) { melSave(melSelected().filter((x) => x !== rm.dataset.rm)); draw(); }
+  });
+  $('melSearch').addEventListener('input', draw);
+  $('melSearch').addEventListener('keydown', (e) => { if (e.key === 'Enter') e.preventDefault(); });
+  if (melSelected().length) box.open = true;
+  draw();
+})();
+function renderMel(b) {
+  const el = $('mel'), card = $('melCard'), m = b.mel;
+  if (!el) return;
+  const tab = [...document.querySelectorAll('#tabs a')].find((a) => a.getAttribute('href') === '#melCard');
+  if (card) card.hidden = !m;
+  if (tab) tab.hidden = !m;
+  if (!m) { el.innerHTML = ''; return; }
+  const cls = m.blocked ? 'nogo' : m.conditional ? 'caution' : 'ok';
+  el.innerHTML = `<p><span class="pill ${cls}">${m.blocked ? 'No-go' : m.conditional ? 'Conditions' : 'No limit'}</span>${esc(m.summary)}</p>
+    ${m.items.map((i) => `<div class="factor ${i.limits.some((l) => l.level === 'nogo') ? 'nogo' : i.limits.some((l) => l.level === 'caution') ? 'caution' : 'ok'}">
+      <div><b>${esc(i.short)}</b> <span class="hint">MMEL ${esc(i.id)} · ${esc(i.section)} · category ${esc(i.cat)}${i.repair ? ', repair ' + esc(i.repair) : ''}${i.installed !== '-' ? ` · ${esc(i.installed)} installed, ${esc(i.required)} required` : ''}</span></div>
+      ${i.via ? `<div class="d">Counted as inoperative because item ${esc(i.via)} is deferred.</div>` : ''}
+      ${i.limits.length ? `<ul class="rlist">${i.limits.map((l) => `<li><span class="pill ${l.level}">${l.level === 'nogo' ? 'No-go' : l.level === 'caution' ? 'Caution' : 'OK'}</span>${esc(l.text)}</li>`).join('')}</ul>` : '<div class="d">No operating limit on this flight.</div>'}
+      ${i.procedures.length ? `<div class="d">Requires the ${esc(i.procedures.join(' and the '))} in your MEL.</div>` : ''}
+      <details><summary>Master MEL remarks</summary><p class="hint">${esc(i.remarks || 'None.')}</p></details></div>`).join('')}
+    <p class="hint">${esc(m.source)}. ${esc(m.note)} Change the list under "Deferred equipment (MEL)" on the flight form.</p>`;
 }
 function renderAudio(b) {
   const el = $('audio');
@@ -272,7 +330,7 @@ function render(b) {
   lastBrief = b;
   ensureCards();
   const failed = [];
-  for (const fn of [renderVerdict, renderFactors, renderMap, renderSurface, renderTerminals, renderWinds, renderHazards, renderFuel, renderTurb, renderSimRadar, renderRisk, renderAudio, renderPireps, renderEnroute, renderNotams, renderSources, renderRouting, renderModels]) {
+  for (const fn of [renderVerdict, renderFactors, renderMap, renderSurface, renderTerminals, renderWinds, renderHazards, renderFuel, renderTurb, renderSimRadar, renderRisk, renderMel, renderAudio, renderPireps, renderEnroute, renderNotams, renderSources, renderRouting, renderModels]) {
     try { fn(b); } catch (e) { failed.push(fn.name.replace(/^render/, '')); if (window.console) console.error(fn.name, e); }
   }
   if (failed.length) status(`Briefing ready, but these sections could not be shown: ${failed.join(', ')}. Reload the page to get the latest version.`, true);

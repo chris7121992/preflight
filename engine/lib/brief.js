@@ -13,6 +13,7 @@ const fieldperf = require('./fieldperf');
 const afmto = require('./afmto');
 const afmld = require('./afmld');
 const risk = require('./risk');
+const mel = require('./mel');
 const ffrunway = require('./ffrunway');
 const perfLib = require('./perf');
 const nwp = require('./nwp');
@@ -268,6 +269,7 @@ async function buildBriefing(plan, input) {
     // takeoff and landing figures from a ForeFlight Runway Analysis (uploaded or typed in)
     ra: ffrunway.clean(input.ra),
     sicLow: !!input.sicLow,
+    mel: [...new Set((Array.isArray(input.mel) ? input.mel : String(input.mel || '').split(/[\s,;]+/)).map((x) => String(x).trim()).filter((x) => mel.has(x)))],
     notamText: typeof input.notamText === 'string' ? input.notamText.slice(0, 2e6) : '',
     towLb: input.ffFuel && isFinite(input.ffFuel.tow) && input.ffFuel.tow > 12000 && input.ffFuel.tow < 21000 ? Number(input.ffFuel.tow) : null,
     ffFuel: input.ffFuel && typeof input.ffFuel === 'object' ? Object.fromEntries(Object.entries(input.ffFuel).filter(([, v]) => typeof v === 'number' && isFinite(v))) : null,
@@ -1102,6 +1104,18 @@ async function buildBriefing(plan, input) {
     add(fuel.level, 'Fuel/Range', fuel.level === 'nogo' ? 'Planned fuel is below the minimum' : fuel.level === 'caution' ? 'Fuel: more than planned is recommended' : 'Fuel recommendation', `${fuel.text} ${fuel.notes.join(' ')} Based on: ${fuel.basis}.`, 'fuel');
   }
 
+  // Deferred equipment (MEL): each item's provisos checked against this flight
+  let melInfo = null;
+  if (opts.mel.length) {
+    try {
+      const ends = [[dep, 'departure', opts.etd], [dest, 'destination', etaMs]].filter(([p]) => p && isFinite(p.lat) && isFinite(p.lon));
+      // night as in 14 CFR 1.1: the sun more than 6 degrees below the horizon
+      const night = ends.map(([p, role, t]) => ({ id: p.id, role, night: risk.sunElevation(p.lat, p.lon, t) < -6, nearNight: [t - 45 * 60e3, t + 45 * 60e3].some((x) => risk.sunElevation(p.lat, p.lon, x) < -6) }));
+      const row = altOpts && altOpts.rows ? altOpts.rows.find((r) => r.fl === Math.round(opts.cruiseAlt / 1000) * 10) : null;
+      melInfo = mel.apply({ ids: opts.mel, add, factors, stations, cruiseAlt: opts.cruiseAlt, rules: opts.rules, eteMin, night, icingLayers: models && models.icingLayers, tripFuelLb: row ? row.fuelLb : null });
+    } catch (e) { errors.push({ source: 'MEL', message: e.message }); }
+  }
+
   // Data age (snapshot mode on the free Firebase plan)
   let dataAsOf = null;
   const meta = await wx.snapMeta().catch(() => null);
@@ -1143,6 +1157,7 @@ async function buildBriefing(plan, input) {
     dataGaps: missingCritical.length > 0,
   };
   out.plan.crew = { sicLow: !!opts.sicLow };
+  out.mel = melInfo;
   try { out.risk = risk.assess(out); } catch (e) { out.risk = null; }
   return out;
 }
@@ -1170,7 +1185,7 @@ function decide(factors, errors, { dep, dest, opts, etaMs }) {
   } else if (critGaps.length) {
     verdict = 'INCOMPLETE';
     headline = `Cannot complete the assessment: ${critGaps.map((e) => e.source).join(', ')} unavailable. Do not rely on this result.`;
-  } else if (caution.length >= 4 || caution.some((c) => ['Convection', 'Icing', 'Data', 'Crosswind', 'Ceiling/Vis', 'Alternate', 'Tailwind', 'Fuel/Range'].includes(c.category))) {
+  } else if (caution.length >= 4 || caution.some((c) => ['Convection', 'Icing', 'Data', 'Crosswind', 'Ceiling/Vis', 'Alternate', 'Tailwind', 'Fuel/Range', 'MEL'].includes(c.category))) {
     verdict = 'GO WITH CAUTION';
     headline = `Go with caution: no hard limits exceeded, but ${caution.length} hazard${caution.length > 1 ? 's' : ''} need a plan.`;
   } else if (caution.length) {

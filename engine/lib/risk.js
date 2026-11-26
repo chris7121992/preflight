@@ -37,7 +37,7 @@ const ROLE_W = { departure: 0.75, destination: 1, alternate: 0.5 };
 const CATS = {
   Convection: [0.55, 'En route'], Icing: [0.45, 'En route'], Turbulence: [0.28, 'En route'], SIGMET: [0.35, 'En route'], 'Wind shear': [0.4, null],
   'Volcanic ash': [0.75, 'En route'], 'Surface analysis': [0.15, 'En route'], 'Fuel/Range': [0.55, 'Flight'], NOTAM: [0.22, null], Data: [0.25, 'Flight'],
-  Alternate: [0.4, 'Alternate'], Routing: [0.15, 'En route'], Crew: [0.2, 'Flight'], Wind: [0.2, null],
+  Alternate: [0.4, 'Alternate'], Routing: [0.15, 'En route'], Crew: [0.2, 'Flight'], Wind: [0.2, null], MEL: [0.5, 'Flight'],
 };
 // findings that only raise the floor of a hazard measured directly at a terminal
 const FLOOR = { 'Ceiling/Vis': 'lowwx', Crosswind: 'xwind', Tailwind: 'tailwind', Runway: 'runway', Performance: 'runway' };

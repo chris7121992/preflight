@@ -439,3 +439,27 @@ test('AFM takeoff tables: wet runway', () => {
   // wet with anti-ice on
   assert.ok(afmto.takeoff({ ...q, wet: true, antiIce: true }).ft > dry.ft);
 });
+
+test('MEL: deferred items limit the flight by their provisos', () => {
+  const mel = require('../engine/lib/mel');
+  assert.ok(mel.list().length > 400 && mel.has('30-20-01') && !mel.has('nope'));
+  const run = (ids, o = {}) => { const f = []; const r = mel.apply({ ids, add: (level, category, title) => f.push({ level, category, title }), factors: [], stations: [], cruiseAlt: 38000, rules: '91', eteMin: 120, night: [], ...o }); return { r, f }; };
+  assert.strictEqual(run([]).r, null);
+  // engine anti-ice: a caution to stay out of icing, a no-go once icing is forecast
+  assert.deepStrictEqual(run(['30-20-01']).f.map((x) => x.level), ['caution']);
+  assert.strictEqual(run(['30-20-01'], { factors: [{ category: 'Icing', level: 'caution', title: 'G-AIRMET icing' }] }).f[0].level, 'nogo');
+  // static port heater: no RVSM at FL380, fine at FL280; day only
+  assert.ok(run(['30-30-02']).f.some((x) => x.level === 'nogo' && /RVSM/.test(x.title)));
+  assert.ok(!run(['30-30-02'], { cruiseAlt: 28000 }).f.some((x) => x.level === 'nogo'));
+  assert.ok(run(['30-30-02'], { cruiseAlt: 28000, night: [{ id: 'KAAA', role: 'destination', night: true }] }).f.some((x) => x.level === 'nogo' && /night/.test(x.title)));
+  // a yaw damper deferral makes the autopilot inoperative too, which rules out RVSM
+  const yd = run(['22-10-05-00A']);
+  assert.ok(yd.r.items.some((i) => i.id === '22-10-03-00A' && i.via === '22-10-05-00A') && yd.r.blocked === 1);
+  // weather radar with thunderstorms: no-go under Part 135, caution under Part 91
+  const cb = { factors: [{ category: 'Convection', level: 'caution', title: 'Convective SIGMET' }] };
+  assert.strictEqual(run(['34-42-01'], { ...cb, rules: '135' }).f[0].level, 'nogo');
+  assert.strictEqual(run(['34-42-01'], cb).f[0].level, 'caution');
+  // fuel quantity: 3 hour limit; an item with no proviso only lists
+  assert.ok(run(['28-41-02'], { eteMin: 200 }).f.some((x) => x.level === 'nogo'));
+  assert.deepStrictEqual(run(['25-10-06']).f.map((x) => x.level), ['info']);
+});
