@@ -184,7 +184,7 @@ function status(msg, err, busy) {
 
 // A phone can hold an older copy of the page while loading this newer script, so cards added since are
 // created here when the page does not have them, and one card failing never stops the rest.
-const LATER_CARDS = [['audioCard', 'audio', 'Audio briefing', 'Audio', 'mapCard'], ['fuelCard', 'fuel', 'Fuel recommendation', 'Fuel', 'modelsCard'], ['simCard', 'simradar', 'Simulated radar for the flight', 'Sim radar', 'terminalsCard'], ['turbCard', 'turb', 'Turbulence by route and altitude', 'Turbulence', 'fuelCard']];
+const LATER_CARDS = [['audioCard', 'audio', 'Audio briefing', 'Audio', 'mapCard'], ['riskCard', 'risk', 'Risk analysis', 'Risk', 'audioCard'], ['fuelCard', 'fuel', 'Fuel recommendation', 'Fuel', 'modelsCard'], ['simCard', 'simradar', 'Simulated radar for the flight', 'Sim radar', 'terminalsCard'], ['turbCard', 'turb', 'Turbulence by route and altitude', 'Turbulence', 'fuelCard']];
 function ensureCards() {
   for (const [cardId, bodyId, title, tab, beforeId] of LATER_CARDS) {
     if ($(bodyId)) continue;
@@ -199,6 +199,21 @@ function ensureCards() {
 }
 function loadScriptOnce(src) {
   return new Promise((res, rej) => { const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = () => rej(new Error('could not load ' + src)); document.head.appendChild(el); });
+}
+function renderRisk(b) {
+  const el = $('risk'), k = b.risk;
+  if (!el) return;
+  if (!k) { el.innerHTML = '<p class="hint">The risk analysis could not be built for this briefing.</p>'; return; }
+  const cls = k.level === 'low' ? 'go' : k.level === 'moderate' ? 'info' : k.level === 'high' ? 'caution' : 'nogo';
+  const bar = (v, c) => `<span class="rbar"><span class="rfill ${c}" style="width:${Math.max(2, Math.min(100, v))}%"></span></span>`;
+  el.innerHTML = `
+    <div class="rhead"><span class="rscore ${cls}">${k.score}</span><div><div class="rlevel">${esc(k.level.toUpperCase())} <span class="hint">of 100</span></div>
+      <div class="rmeter"><span class="rmark" style="left:${Math.min(100, k.score)}%"></span></div>
+      <div class="hint">${k.compoundingAdds ? `Hazards on their own: ${k.baseScore}. Compounding between them adds ${k.compoundingAdds}.` : 'No hazards are compounding each other.'}${k.reduce ? ' ' + esc(k.reduce) : ''}</div></div></div>
+    ${k.phases.length ? `<div class="rphases">${k.phases.map((p) => `<div class="rphase"><div class="k">${esc(p.name === 'Flight' ? 'Whole flight' : p.name)}</div>${bar(p.score, p.score < 15 ? 'go' : p.score < 35 ? 'info' : p.score < 60 ? 'caution' : 'nogo')}<div class="v">${p.score}</div></div>`).join('')}</div>` : ''}
+    ${k.drivers.length ? `<h3>What drives the score</h3><table class="rtable"><tr><th>Hazard</th><th>Phase</th><th>Severity</th><th>Points</th></tr>${k.drivers.map((d) => `<tr><td>${esc(d.label)}</td><td>${esc(d.phase === 'Flight' ? 'Whole flight' : d.phase)}</td><td>${bar(d.severity, d.severity < 30 ? 'go' : d.severity < 60 ? 'caution' : 'nogo')}</td><td>${d.effect}</td></tr>`).join('')}</table>` : '<p class="hint">Nothing in the briefing raises the score.</p>'}
+    ${k.compounding.length ? `<h3>Compounding</h3><ul class="rlist">${k.compounding.map((c) => `<li>${esc(c.label)} <span class="hint">(${c.strength})</span></li>`).join('')}</ul>` : ''}
+    <p class="hint">Points are how far the score falls if that hazard is removed. ${esc(k.method)} It is recalculated from the current weather, NOTAMs, performance, fuel and crew inputs each time the briefing runs.</p>`;
 }
 function renderAudio(b) {
   const el = $('audio');
@@ -257,7 +272,7 @@ function render(b) {
   lastBrief = b;
   ensureCards();
   const failed = [];
-  for (const fn of [renderVerdict, renderFactors, renderMap, renderSurface, renderTerminals, renderWinds, renderHazards, renderFuel, renderTurb, renderSimRadar, renderAudio, renderPireps, renderEnroute, renderNotams, renderSources, renderRouting, renderModels]) {
+  for (const fn of [renderVerdict, renderFactors, renderMap, renderSurface, renderTerminals, renderWinds, renderHazards, renderFuel, renderTurb, renderSimRadar, renderRisk, renderAudio, renderPireps, renderEnroute, renderNotams, renderSources, renderRouting, renderModels]) {
     try { fn(b); } catch (e) { failed.push(fn.name.replace(/^render/, '')); if (window.console) console.error(fn.name, e); }
   }
   if (failed.length) status(`Briefing ready, but these sections could not be shown: ${failed.join(', ')}. Reload the page to get the latest version.`, true);

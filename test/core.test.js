@@ -403,3 +403,24 @@ test('AFM takeoff tables: a printed value is used alone', () => {
   const r = afmto.takeoff({ weightLb: 20200, tempC: 5, elevFt: 8000, headKt: 0 });
   assert.equal(r.flaps, 15); assert.equal(r.ft, 5180); assert.equal(r.shaded, false);
 });
+
+test('risk score: compounding and saturation', () => {
+  const risk = require('../engine/lib/risk');
+  const st = (o) => ({ id: 'KAAA', role: 'destination', timeOfInterest: '2026-06-21T18:00:00Z', judged: { ceiling: null, vis: 10, spd: 5, gust: 0, flags: {} }, runway: { id: '18', len: 7000, head: 5, crossG: 3, requiredFt: 4000, marginFt: 3000 }, ...o });
+  const brief = (s) => ({ plan: { limits: { maxXwind: 25 }, route: [{ lat: 30, lon: -95 }, { lat: 33, lon: -97 }] }, stations: [s], factors: [], decision: { verdict: 'GO' } });
+  const calm = risk.assess(brief(st({})));
+  assert.ok(calm.score < 5 && calm.level === 'low');
+  const wet = risk.assess(brief(st({ judged: { ceiling: null, vis: 10, spd: 5, gust: 0, flags: { rain: true } } })));
+  const tail = risk.assess(brief(st({ runway: { id: '18', len: 7000, head: -8, crossG: 3, requiredFt: 4000, marginFt: 3000 } })));
+  const both = risk.assess(brief(st({ judged: { ceiling: null, vis: 10, spd: 5, gust: 0, flags: { rain: true } }, runway: { id: '18', len: 7000, head: -8, crossG: 3, requiredFt: 4000, marginFt: 3000 } })));
+  // together they score more than combining them independently would give
+  const independent = 100 * (1 - (1 - wet.score / 100) * (1 - tail.score / 100));
+  assert.ok(both.score > independent + 3, `${both.score} vs ${independent}`);
+  assert.ok(both.compounding.length >= 1);
+  // a crosswind near the limit counts far more than twice one at half of it
+  const x = (kt) => risk.assess(brief(st({ runway: { id: '18', len: 7000, head: 5, crossG: kt, requiredFt: 4000, marginFt: 3000 } }))).score;
+  assert.ok(x(22) > 4 * x(11));
+  // everything bad at once stays at or under 100
+  const worst = risk.assess(brief(st({ judged: { ceiling: 200, vis: 0.5, spd: 20, gust: 38, flags: { thunder: true, heavyRain: true }, llws: true }, runway: { id: '18', len: 4000, head: -9, crossG: 24, requiredFt: 4000, marginFt: 0 } })));
+  assert.ok(worst.score > 85 && worst.score <= 100 && worst.level === 'severe');
+});

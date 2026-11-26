@@ -12,6 +12,7 @@ const fuelLib = require('./fuel');
 const fieldperf = require('./fieldperf');
 const afmto = require('./afmto');
 const afmld = require('./afmld');
+const risk = require('./risk');
 const ffrunway = require('./ffrunway');
 const perfLib = require('./perf');
 const nwp = require('./nwp');
@@ -1109,7 +1110,7 @@ async function buildBriefing(plan, input) {
 
   const decision = decide(factors, errors, { dep, dest, opts, etaMs });
   const missingCritical = errors.filter((e) => /METAR|TAF|SIGMET|G-AIRMET/.test(e.source));
-  return {
+  const out = {
     generatedAt: new Date().toISOString(),
     dataAsOf,
     disclaimer: 'Advisory only. This is not an official FAA/NWS weather briefing and does not satisfy 14 CFR 91.103. Obtain a standard briefing (1800wxbrief.com / Leidos or an approved provider) and comply with the AFM and your operator\'s OpSpecs/SOPs. The pilot in command is the final authority.',
@@ -1137,6 +1138,9 @@ async function buildBriefing(plan, input) {
     errors,
     dataGaps: missingCritical.length > 0,
   };
+  out.plan.crew = { sicLow: !!opts.sicLow };
+  try { out.risk = risk.assess(out); } catch (e) { out.risk = null; }
+  return out;
 }
 
 // Turbulence felt depends on aircraft size relative to the XLS+ (~20,000 lb).

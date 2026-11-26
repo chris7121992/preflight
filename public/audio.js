@@ -27,6 +27,7 @@
     if (dst) L.push(`Destination, ${dst.id}, around ${zt(p.eta)}: ${cond(dst.judged)}, ${windTxt(dst.windUsed)}. ${rwyTxt(dst) ? `Expect ${rwyTxt(dst)}.` : ''}${dst.field && dst.field.requiredFt ? ` Landing needs ${n(dst.field.requiredFt)} ft.` : ''}${dst.alternateRequired ? ' An alternate is required.' : ''}`);
     if (alt) L.push(`Alternate, ${alt.id}: ${cond(alt.judged)}.${alt.altMins ? (alt.altMins.ok ? ' It meets alternate minimums.' : ' It is below alternate minimums.') : ''}`);
     if (b.fuel && b.fuel.recommendedLb) L.push(`Fuel: about ${n(b.fuel.recommendedLb)} lb recommended${b.fuel.plannedLb ? `, ${n(b.fuel.plannedLb)} lb planned` : ''}.`);
+    if (b.risk) L.push(`${b.risk.summary.replace(/ of 100/, ' out of 100')}`);
     const ng = facts(b, 'nogo'), ca = facts(b, 'caution');
     if (ng.length) L.push(`Limiting items: ${ng.slice(0, 4).map((f) => f.title).join('. ')}.`);
     if (ca.length) L.push(`Cautions: ${ca.slice(0, 5).map((f) => f.title).join('. ')}${ca.length > 5 ? `, and ${ca.length - 5} more` : ''}.`);
