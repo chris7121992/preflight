@@ -56,6 +56,48 @@ async function setNotamFile(f) {
   } catch (e) { notamFromFile = ''; t.innerHTML = `Could not read <strong>${esc(f.name)}</strong> (${esc(e.message)}). Try pasting the NOTAM text instead.`; }
 }
 $('notamFile').addEventListener('change', (e) => setNotamFile(e.target.files[0]));
+
+// ForeFlight Runway Analysis: read in the browser, its figures put in boxes the pilot can check or correct
+let raParsed = null, raSource = '';
+const RA_IDS = ['raTkRwy', 'raTkDist', 'raTkMtow', 'raLdRwy', 'raLdDist'];
+function raClear() { raParsed = null; raSource = ''; RA_IDS.forEach((i) => { $(i).value = ''; }); $('raLdFactor').value = 'actual'; $('raLdWet').checked = false; }
+async function setRaFile(f) {
+  if (!f) return;
+  const t = $('raDropText');
+  t.innerHTML = `Reading <strong>${esc(f.name)}</strong>…`;
+  try {
+    const text = /\.pdf$/i.test(f.name) || f.type === 'application/pdf' ? await window.NotamGuide.readPdf(f) : await f.text();
+    const ra = window.PreflightEngine.parseRunwayAnalysis(text);
+    $('raFields').open = true;
+    if (!ra) { t.innerHTML = `<strong>${esc(f.name)}</strong>: no takeoff or landing distances could be read from this file. Enter the figures in the boxes below. Click to try another file.`; return; }
+    raClear(); raParsed = ra; raSource = f.name;
+    const n = (x) => Number(x).toLocaleString('en-US'), k = ra.takeoff, l = ra.landing;
+    if (k) { $('raTkRwy').value = k.runway || ''; $('raTkDist').value = k.distFt || ''; $('raTkMtow').value = k.mtowLb || ''; }
+    if (l) { $('raLdRwy').value = l.runway || ''; $('raLdDist').value = l.distFt || ''; $('raLdFactor').value = l.factor || 'actual'; $('raLdWet').checked = !!l.wet; }
+    const bits = [
+      k ? `Takeoff${k.airport ? ' ' + esc(k.airport) : ''}${k.runway ? ' runway ' + esc(k.runway) : ''}: ${k.distFt ? n(k.distFt) + ' ft required' : 'no distance found'}${k.mtowLb ? ', maximum ' + n(k.mtowLb) + ' lb' : ''}${k.v1 ? `, V1 ${k.v1}` : ''}${k.vr ? ` VR ${k.vr}` : ''}${k.v2 ? ` V2 ${k.v2}` : ''}` : 'No takeoff figures found',
+      l ? `Landing${l.airport ? ' ' + esc(l.airport) : ''}${l.runway ? ' runway ' + esc(l.runway) : ''}: ${n(l.distFt)} ft ${l.factor === 'actual' ? 'unfactored' : 'with the ' + l.factor + '% factor'}${l.wet ? ', wet' : ''}${l.vref ? `, VREF ${l.vref}` : ''}` : 'No landing figures found',
+    ];
+    t.innerHTML = `<strong>${esc(f.name)}</strong> read. Click to replace.<br>${bits.join('<br>')}<br>Check these against the analysis and correct the boxes below if needed.`;
+  } catch (e) { t.innerHTML = `Could not read <strong>${esc(f.name)}</strong> (${esc(e.message)}). Enter the figures in the boxes below instead.`; $('raFields').open = true; }
+}
+function raBody() {
+  const v = (i) => $(i).value.trim(), p = raParsed || {}, k = p.takeoff || {}, l = p.landing || {};
+  if (!RA_IDS.some((i) => i !== 'raTkRwy' && i !== 'raLdRwy' && v(i))) return null;
+  // speeds and the airport come along only while the boxes still hold what was read from the file
+  const tkSame = raParsed && String(k.distFt || '') === v('raTkDist'), ldSame = raParsed && String(l.distFt || '') === v('raLdDist');
+  return {
+    source: raParsed ? raSource : 'entered by hand',
+    takeoff: { distFt: v('raTkDist'), mtowLb: v('raTkMtow'), runway: v('raTkRwy'), ...(tkSame ? { airport: k.airport, wet: k.wet, v1: k.v1, vr: k.vr, v2: k.v2, flaps: k.flaps, limit: k.limit } : {}) },
+    landing: { distFt: v('raLdDist'), factor: $('raLdFactor').value, wet: $('raLdWet').checked, runway: v('raLdRwy'), ...(ldSame ? { airport: l.airport, vref: l.vref } : {}) },
+  };
+}
+$('raFile').addEventListener('change', (e) => setRaFile(e.target.files[0]));
+$('raClear').addEventListener('click', (e) => { e.preventDefault(); raClear(); $('raDropText').innerHTML = '<strong>Drop your Runway Analysis PDF</strong><br>its takeoff and landing figures replace the Flight Planning Guide tables'; });
+const rDrop = $('raDrop');
+['dragenter', 'dragover'].forEach((ev) => rDrop.addEventListener(ev, (e) => { e.preventDefault(); rDrop.classList.add('over'); }));
+['dragleave', 'drop'].forEach((ev) => rDrop.addEventListener(ev, (e) => { e.preventDefault(); rDrop.classList.remove('over'); }));
+rDrop.addEventListener('drop', (e) => setRaFile(e.dataTransfer.files[0]));
 const nDrop = $('notamDrop');
 ['dragenter', 'dragover'].forEach((ev) => nDrop.addEventListener(ev, (e) => { e.preventDefault(); nDrop.classList.add('over'); }));
 ['dragleave', 'drop'].forEach((ev) => nDrop.addEventListener(ev, (e) => { e.preventDefault(); nDrop.classList.remove('over'); }));
@@ -109,6 +151,7 @@ $('planForm').addEventListener('submit', async (e) => {
     fileText, filename: fileName, routeText: fileText ? '' : routeText,
     // the briefing's fuel plan applies only while the form still holds the briefing's flight
     ffFuel: briefingFlight && briefingFlight.fuel && !fileText && routeText.trim().toUpperCase().startsWith(briefingFlight.dep) && routeText.trim().toUpperCase().endsWith(briefingFlight.dest) ? briefingFlight.fuel : null,
+    ra: raBody(),
     alternate: $('alternate').value.trim(), cruiseAlt: $('cruiseAlt').value, tas: $('tas').value,
     etd: etdLocal ? new Date(etdLocal).toISOString() : null, rules: $('rules').value,
     destCircHaa: $('destCircHaa').value, destCircNa: $('destCircNa').checked, destHat: $('destHat').value, destVisMin: $('destVisMin').value,
@@ -196,7 +239,7 @@ function p135Html(s, b) {
   const n = (x) => x.toLocaleString('en-US');
   return p.options.map((o) => {
     const used = p.uses === o.key;
-    return `<div class="rule"><span class="pill ${o.suitable ? 'ok' : used ? 'nogo' : 'info'}">${o.key}% ${o.suitable ? 'ok' : 'short'}</span><span><b>${esc(o.rule)}</b>${used ? ' (applied)' : ''}: land within ${esc(o.label)}. Needs ${n(o.dryFt)} ft dry${p.wet ? `, ${n(o.wetFt)} ft wet (+15%${o.key === '80' ? ', reference only: your Destination Airport Analysis sets the wet margin' : ', 135.385(d)'})` : ''}; runway ${esc(p.runway)} is ${n(p.runwayFt)} ft${p.longestFt > p.runwayFt ? `, longest ${n(p.longestFt)} ft` : ''} (${o.marginFt >= 0 ? n(o.marginFt) + ' ft to spare' : n(-o.marginFt) + ' ft short'}${p.wet ? ' on the wet figure' : ''}).${o.key === '80' && !p.eod ? ' Available only to an eligible on-demand operator with an approved Destination Airport Analysis and OpSpec authorization.' : ''}</span></div>`;
+    return `<div class="rule"><span class="pill ${o.suitable ? 'ok' : used ? 'nogo' : 'info'}">${o.key}% ${o.suitable ? 'ok' : 'short'}</span><span><b>${esc(o.rule)}</b>${used ? ' (applied)' : ''}: land within ${esc(o.label)}. Needs ${n(o.dryFt)} ft${p.raWet ? ' (the analysis figure is already for a wet runway)' : ' dry'}${p.raWet ? '' : p.wet ? `, ${n(o.wetFt)} ft wet (+15%${o.key === '80' ? ', reference only: your Destination Airport Analysis sets the wet margin' : ', 135.385(d)'})` : ''}; runway ${esc(p.runway)} is ${n(p.runwayFt)} ft${p.longestFt > p.runwayFt ? `, longest ${n(p.longestFt)} ft` : ''} (${o.marginFt >= 0 ? n(o.marginFt) + ' ft to spare' : n(-o.marginFt) + ' ft short'}${p.wet ? ' on the wet figure' : ''}).${o.key === '80' && !p.eod ? ' Available only to an eligible on-demand operator with an approved Destination Airport Analysis and OpSpec authorization.' : ''}</span></div>`;
   }).join('') + (p.eod && p.picMust && p.picMust.length ? `<div class="hint">PIC must make this landing if the SIC has under 100 h in type (135.4): ${esc(p.picMust.join('; '))}.</div>` : '');
 }
 
@@ -292,7 +335,7 @@ function renderTerminals(b) {
       ${s.altMins ? `<div class="rule"><span class="pill ${s.altMins.ok ? 'ok' : 'nogo'}">${s.altMins.ok ? 'Legal alt' : 'Below'}</span><span><b>${esc(s.altMins.rule)}</b>: ${s.altMins.none ? esc(s.altMins.basis) : `alternate minimums ${s.altMins.ceil} ft / ${s.altMins.vis} SM (${esc(s.altMins.basis)}).`}${srcTag(s.altMins)}${s.altMins.published ? `<br><span class="hint">FAA alternate minimums entry: ${esc(s.altMins.published)}</span>` : ''}</span></div>` : ''}
       ${rw && !rw.none ? `<div>Wind used ${windStr(s.windUsed)} → best runway <b>${esc(rw.id)}</b> (${rw.len.toLocaleString('en-US')} ft${rw.requiredFt ? `, ${rw.requiredFt.toLocaleString('en-US')} ft needed for ${s.field.kind}` : ''}): <span class="${rw.head < 0 ? 'head' : ''}">${rw.head >= 0 ? 'head' : 'tail'} ${Math.abs(rw.head)} kt</span>, crosswind ${rw.cross}${rw.crossG !== rw.cross ? ` (gust ${rw.crossG})` : ''} kt</div>
       ${p135Html(s, b)}
-      ${s.field ? `<div class="hint">${esc(s.field.basis)}${s.field.kind === 'landing' && s.field.actualFt ? `. Actual ${s.field.actualFt.toLocaleString('en-US')} ft, with the 60% factor ${s.field.factoredFt.toLocaleString('en-US')} ft${s.field.part135 ? `, with the 80% eligible on-demand factor ${s.field.part135.options[1].dryFt.toLocaleString('en-US')} ft` : ''}, VREF ${s.field.vref} kt` : s.field.actualFt ? `: ${s.field.actualFt.toLocaleString('en-US')} ft` : ': ' + esc(s.field.reason || 'not available')}. From the XLS+ Flight Planning Guide.</div>` : ''}` : ''}
+      ${s.field ? `<div class="hint">${esc(s.field.basis)}${s.field.kind === 'landing' && s.field.actualFt ? `. Actual ${s.field.actualFt.toLocaleString('en-US')} ft, with the 60% factor ${s.field.factoredFt.toLocaleString('en-US')} ft${s.field.part135 ? `, with the 80% eligible on-demand factor ${s.field.part135.options[1].dryFt.toLocaleString('en-US')} ft` : ''}, VREF ${s.field.vref} kt` : s.field.ra && s.field.ra.distFt ? '' : s.field.actualFt ? `: ${s.field.actualFt.toLocaleString('en-US')} ft` : ': ' + esc(s.field.reason || 'not available')}. ${s.field.ra && s.field.ra.distFt ? `From your ForeFlight Runway Analysis${s.field.ra.fpgFt ? ` (the Flight Planning Guide gives ${s.field.ra.fpgFt.toLocaleString('en-US')} ft dry, zero wind)` : ''}${s.field.kind === 'takeoff' && s.field.ra.v1 ? `; V1 ${s.field.ra.v1}${s.field.ra.vr ? `, VR ${s.field.ra.vr}` : ''}${s.field.ra.v2 ? `, V2 ${s.field.ra.v2}` : ''} kt` : ''}${s.field.kind === 'takeoff' && s.field.ra.mtowLb ? `; maximum allowable takeoff weight ${s.field.ra.mtowLb.toLocaleString('en-US')} lb` : ''}.` : 'From the XLS+ Flight Planning Guide.'}</div>` : ''}` : ''}
       ${s.tafPeriods && s.tafPeriods.length ? `<div class="table-wrap"><table><tr><th>Group</th><th>Valid</th><th>Wind</th><th>Vis</th><th>Ceiling</th><th>Wx</th></tr>${s.tafPeriods.map((p) => `<tr><td>${esc(p.change)}${p.probability ? ' ' + p.probability : ''}</td><td>${z(p.from)}–${z(p.to)}</td><td>${windStr(p.wind)}</td><td>${p.vis ?? '—'}</td><td>${p.ceiling ?? '—'}</td><td>${esc(p.wx)}</td></tr>`).join('')}</table></div>` : ''}
     </div>`;
   }).join('');

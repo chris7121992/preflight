@@ -52,6 +52,24 @@
           <details id="notamPaste"><summary>or paste NOTAM text</summary>
             <textarea id="notamText" rows="5" placeholder="HOU 09/188 HOU RWY 13L/31R CLSD 2609292023-2712312300" spellcheck="false"></textarea>
           </details>
+          <h2 class="sub">ForeFlight Runway Analysis</h2>
+          <label class="drop small" id="raDrop">
+            <input type="file" id="raFile" accept=".pdf,.txt,application/pdf,text/plain">
+            <span id="raDropText"><strong>Drop your Runway Analysis PDF</strong><br>its takeoff and landing figures replace the Flight Planning Guide tables</span>
+          </label>
+          <details id="raFields"><summary>Runway analysis figures: check them, or enter them by hand</summary>
+            <p class="hint">Takeoff figures apply at the departure and landing figures at the destination. Leave a box blank to use the Flight Planning Guide tables for it.</p>
+            <div class="grid">
+              <label>Takeoff runway<input type="text" id="raTkRwy" placeholder="e.g. 13R" maxlength="3" autocomplete="off"></label>
+              <label>Takeoff distance required (ft)<input type="number" id="raTkDist" placeholder="from the analysis" min="1500" max="16000" step="10"></label>
+              <label>Max allowable takeoff weight (lb)<input type="number" id="raTkMtow" placeholder="from the analysis" min="10000" max="21000" step="10"></label>
+              <label>Landing runway<input type="text" id="raLdRwy" placeholder="e.g. 14" maxlength="3" autocomplete="off"></label>
+              <label>Landing distance (ft)<input type="number" id="raLdDist" placeholder="from the analysis" min="1500" max="16000" step="10"></label>
+              <label>That landing figure is<select id="raLdFactor"><option value="actual">Unfactored (actual distance)</option><option value="60">Factored for 60% of the runway</option><option value="80">Factored for 80% of the runway</option></select></label>
+              <label class="check"><input type="checkbox" id="raLdWet"> Landing figure is for a wet runway (no further 15% is added)</label>
+            </div>
+            <p class="hint"><a href="#" id="raClear">Clear these figures</a></p>
+          </details>
         </div>
         <div>
           <h2>Flight</h2>

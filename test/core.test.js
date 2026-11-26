@@ -336,3 +336,17 @@ test('turbulence: shear under a jet is rougher than the level above it, and EDR 
   const pos = turb.locate(lat, { lat: 31, lon: -87.5 });
   assert.ok(pos.c < -35 && pos.c > -60, `north of an eastbound course is left: ${pos.c}`);
 });
+
+test('ForeFlight Runway Analysis: figures are read from labelled text and cleaned', () => {
+  const { parseRunwayAnalysis, clean } = require('../engine/lib/ffrunway');
+  const ra = parseRunwayAnalysis(['Runway Analysis', 'Takeoff', 'KHOU RWY 13R', 'Runway Condition: Wet', 'Flaps 15', 'Takeoff Weight 19,850 lb', 'Max Allowable Takeoff Weight: 20,200 lb', 'Limited by: Field Length', 'Takeoff Field Length 4,620 ft', 'V1 108 VR 112 V2 119', '', 'Landing', 'MMSL RWY 16', 'Runway Condition Dry', 'Landing Weight 17,900 lb', 'Unfactored Landing Distance 3,010 ft', 'Factored Landing Distance (1.67) 5,020 ft', 'VREF 111 VAPP 116'].join('\n'));
+  assert.equal(ra.takeoff.airport, 'KHOU'); assert.equal(ra.takeoff.runway, '13R'); assert.equal(ra.takeoff.distFt, 4620); assert.equal(ra.takeoff.mtowLb, 20200);
+  assert.equal(ra.takeoff.wet, true); assert.equal(ra.takeoff.v1, 108); assert.equal(ra.takeoff.vr, 112); assert.equal(ra.takeoff.v2, 119); assert.equal(ra.takeoff.limit, 'field length');
+  assert.equal(ra.landing.airport, 'MMSL'); assert.equal(ra.landing.runway, '16'); assert.equal(ra.landing.distFt, 3010); assert.equal(ra.landing.factor, 'actual'); assert.equal(ra.landing.wet, false); assert.equal(ra.landing.vref, 111);
+  const only = parseRunwayAnalysis('Landing\nKCDW Runway 22\nLanding Distance Required (factored 60%) 5,400 ft');
+  assert.equal(only.takeoff, null); assert.equal(only.landing.distFt, 5400); assert.equal(only.landing.factor, '60');
+  assert.equal(parseRunwayAnalysis('nothing useful here'), null);
+  const c = clean({ source: 'x.pdf', takeoff: { distFt: '4620', mtowLb: '', runway: 'rwy 4l' }, landing: { distFt: '99', factor: '60' } });
+  assert.equal(c.takeoff.distFt, 4620); assert.equal(c.takeoff.runway, '04L'); assert.equal(c.landing, null);
+  assert.equal(clean({ takeoff: {}, landing: {} }), null);
+});

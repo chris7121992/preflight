@@ -122,7 +122,7 @@
       head: [['Airport', 'Window', 'Now (METAR)', 'Planning (TAF)', 'Runway / wind / length', 'Alternate rules', 'Models']],
       body: b.stations.map((s) => {
         const j = s.judged || {};
-        const rw = s.runway && !s.runway.none ? `${s.runway.id} ${s.runway.head >= 0 ? 'hw' : 'tw'} ${Math.abs(s.runway.head)} xw ${s.runway.crossG} kt${s.runway.requiredFt ? `\n${s.runway.len.toLocaleString('en-US')} ft, needs ${s.runway.requiredFt.toLocaleString('en-US')}` : ''}` : '-';
+        const rw = s.runway && !s.runway.none ? `${s.runway.id} ${s.runway.head >= 0 ? 'hw' : 'tw'} ${Math.abs(s.runway.head)} xw ${s.runway.crossG} kt${s.runway.requiredFt ? `\n${s.runway.len.toLocaleString('en-US')} ft, needs ${s.runway.requiredFt.toLocaleString('en-US')}${s.field && s.field.ra && s.field.ra.distFt ? ' (FF RA)' : ''}` : ''}` : '-';
         const altRule = s.altTest ? `${s.altTest.rule}: ${s.alternateRequired ? 'alternate REQUIRED' : s.alternateAdvised ? 'alternate advised by models' : 'no alternate needed'} (>= ${s.altTest.ceilNeed} ft & ${s.altTest.visNeed} SM${s.altTest.auto ? ', FAA charts Cat ' + s.altTest.cat : s.altTest.estimate ? ', estimate' : ''})` : s.altMins ? `${s.altMins.rule}: ${s.altMins.none ? 'no usable approach' : `${s.altMins.ok ? 'meets' : 'BELOW'} ${s.altMins.ceil}-${s.altMins.vis}${s.altMins.auto ? ' (FAA charts Cat ' + s.altMins.cat + ')' : s.altMins.estimate ? ' (estimate)' : ''}`}` : '-';
         const ms = mByStation[s.id];
         return [`${s.id}\n${s.role}`, `${z(s.window[0])}-${z(s.window[1])}`, s.metar ? `${s.metar.category} ${s.metar.wind.dir != null ? String(s.metar.wind.dir).padStart(3, '0') : 'VRB'}/${s.metar.wind.spd}${s.metar.wind.gst ? 'G' + s.metar.wind.gst : ''} ${s.metar.temp}/${s.metar.dewp}` : 'none', j.category ? `${j.category} ${j.ceiling != null ? j.ceiling + ' ft' : 'no ceiling'} / ${j.vis ?? '-'} SM (${s.judgedFrom})` : '-', rw, altRule, ms && ms.models && ms.models.length ? `${ms.consensus}${ms.spread >= 2 ? ' (low agreement)' : ''}` : '-'].map(t);
@@ -288,11 +288,11 @@
         section('Part 135 landing limits (135.385, 135.387)');
         table({
           head: [['Airport', 'Runway', 'AFM distance', '60% rule needs', '80% eligible on-demand needs', 'Applied']],
-          body: lim.map((st) => { const q = st.field.part135, [a, e] = q.options; const cell = (o) => `${nn(o.dryFt)} ft${q.wet ? ` (wet ${nn(o.wetFt)})` : ''} - ${o.suitable ? 'met' : 'NOT met'}`; return [`${st.id} ${st.role}`, `${q.runway} ${nn(q.runwayFt)} ft`, `${nn(st.field.actualFt)} ft`, cell(a), cell(e), q.eod ? '80%' : '60%']; }),
+          body: lim.map((st) => { const q = st.field.part135, [a, e] = q.options; const cell = (o) => `${nn(o.dryFt)} ft${q.wet ? ` (wet ${nn(o.wetFt)})` : ''} - ${o.suitable ? 'met' : 'NOT met'}`; return [`${st.id} ${st.role}`, `${q.runway} ${nn(q.runwayFt)} ft`, `${nn(st.field.actualFt)} ft${st.field.ra ? ' (FF RA)' : ''}`, cell(a), cell(e), q.eod ? '80%' : '60%']; }),
           columnStyles: { 0: { fontStyle: 'bold' } },
           didParseCell: (h) => { if (h.section === 'body' && /NOT met/.test(String(h.cell.raw))) h.cell.styles.textColor = lim[h.row.index].field.part135.uses === (h.column.index === 3 ? '60' : '80') ? C.nogo : C.muted; },
         });
-        para(`60%: 135.385(b) and 135.387(a); when the runway may be wet it must be 115% of that figure (135.385(d)). 80%: 135.385(f) and 135.387(b), for an eligible on-demand operation (135.4) with an approved Destination Airport Analysis (135.23(r)) and OpSpec authorization; its wet margin comes from that analysis, so the wet figure shown is a reference. Distances from the XLS+ Flight Planning Guide, dry and zero wind; the AFM governs.`, { size: 6.2, color: C.muted, gap: 4 });
+        para(`60%: 135.385(b) and 135.387(a); when the runway may be wet it must be 115% of that figure (135.385(d)). 80%: 135.385(f) and 135.387(b), for an eligible on-demand operation (135.4) with an approved Destination Airport Analysis (135.23(r)) and OpSpec authorization; its wet margin comes from that analysis, so the wet figure shown is a reference. ${lim.some((st) => st.field.ra) ? 'FF RA: distance from your ForeFlight Runway Analysis, at the conditions set there; other distances' : 'Distances'} from the XLS+ Flight Planning Guide, dry and zero wind; the AFM governs.`, { size: 6.2, color: C.muted, gap: 4 });
       }
       if (tb) {
         section(`Turbulence by flight level on the filed route (EDR, middle of ${tb.models.join(', ')})`);
