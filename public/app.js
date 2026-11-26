@@ -184,7 +184,7 @@ function status(msg, err, busy) {
 
 // A phone can hold an older copy of the page while loading this newer script, so cards added since are
 // created here when the page does not have them, and one card failing never stops the rest.
-const LATER_CARDS = [['fuelCard', 'fuel', 'Fuel recommendation', 'Fuel', 'modelsCard'], ['simCard', 'simradar', 'Simulated radar for the flight', 'Sim radar', 'terminalsCard'], ['turbCard', 'turb', 'Turbulence by route and altitude', 'Turbulence', 'fuelCard']];
+const LATER_CARDS = [['audioCard', 'audio', 'Audio briefing', 'Audio', 'mapCard'], ['fuelCard', 'fuel', 'Fuel recommendation', 'Fuel', 'modelsCard'], ['simCard', 'simradar', 'Simulated radar for the flight', 'Sim radar', 'terminalsCard'], ['turbCard', 'turb', 'Turbulence by route and altitude', 'Turbulence', 'fuelCard']];
 function ensureCards() {
   for (const [cardId, bodyId, title, tab, beforeId] of LATER_CARDS) {
     if ($(bodyId)) continue;
@@ -199,6 +199,13 @@ function ensureCards() {
 }
 function loadScriptOnce(src) {
   return new Promise((res, rej) => { const el = document.createElement('script'); el.src = src; el.onload = res; el.onerror = () => rej(new Error('could not load ' + src)); document.head.appendChild(el); });
+}
+function renderAudio(b) {
+  const el = $('audio');
+  if (!el) return;
+  const go = () => { try { window.AudioBrief.render(b, el); } catch (e) { el.textContent = 'The audio briefing could not be built: ' + e.message; } };
+  if (window.AudioBrief) go();
+  else loadScriptOnce('audio.js?v=' + Date.now()).then(go).catch((e) => { el.textContent = 'The audio briefing could not be loaded: ' + e.message; });
 }
 function renderSimRadar(b) {
   const el = $('simradar');
@@ -250,7 +257,7 @@ function render(b) {
   lastBrief = b;
   ensureCards();
   const failed = [];
-  for (const fn of [renderVerdict, renderFactors, renderMap, renderSurface, renderTerminals, renderWinds, renderHazards, renderFuel, renderTurb, renderSimRadar, renderPireps, renderEnroute, renderNotams, renderSources, renderRouting, renderModels]) {
+  for (const fn of [renderVerdict, renderFactors, renderMap, renderSurface, renderTerminals, renderWinds, renderHazards, renderFuel, renderTurb, renderSimRadar, renderAudio, renderPireps, renderEnroute, renderNotams, renderSources, renderRouting, renderModels]) {
     try { fn(b); } catch (e) { failed.push(fn.name.replace(/^render/, '')); if (window.console) console.error(fn.name, e); }
   }
   if (failed.length) status(`Briefing ready, but these sections could not be shown: ${failed.join(', ')}. Reload the page to get the latest version.`, true);

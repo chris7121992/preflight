@@ -227,3 +227,15 @@ h2.sub { margin-top: 18px; }
 .simmode { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 10px; }
 .simmode button { font: 600 13px var(--sans); padding: 7px 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
 .simmode button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Audio briefing */
+.audio-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+.audio-bar button { font: 600 13px var(--sans); padding: 8px 14px; border-radius: 999px; border: 1px solid var(--line); background: var(--card); color: var(--ink); }
+.audio-bar button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+.audio-bar button[hidden] { display: none; }
+.audio-opt { display: inline-flex; align-items: center; gap: 6px; font: 500 12px var(--sans); color: var(--muted); margin: 0; }
+.audio-opt select { width: auto; max-width: 180px; padding: 5px 8px; font-size: 12px; }
+.audio-text { border-top: 1px solid var(--line); padding: 8px 0; }
+.audio-text summary { cursor: pointer; font: 600 13px var(--sans); }
+.audio-text p { margin: 8px 0 0; line-height: 1.5; }
+@media print { #audioCard { display: none; } }

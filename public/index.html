@@ -118,9 +118,10 @@
 
     <section id="results" hidden>
       <nav class="tabs" id="tabs">
-        <a href="#verdict">Decision</a><a href="#mapCard">Map</a><a href="#factorsCard">Factors</a><a href="#surfaceCard">Surface</a><a href="#routingCard">Route options</a><a href="#turbCard">Turbulence</a><a href="#fuelCard">Fuel</a><a href="#modelsCard">Models</a><a href="#simCard">Sim radar</a><a href="#terminalsCard">Terminals</a><a href="#notamCard">NOTAMs</a><a href="#windsCard">Winds</a><a href="#hazardsCard">Advisories</a><a href="#rawCard">PIREPs/METARs</a>
+        <a href="#verdict">Decision</a><a href="#audioCard">Audio</a><a href="#mapCard">Map</a><a href="#factorsCard">Factors</a><a href="#surfaceCard">Surface</a><a href="#routingCard">Route options</a><a href="#turbCard">Turbulence</a><a href="#fuelCard">Fuel</a><a href="#modelsCard">Models</a><a href="#simCard">Sim radar</a><a href="#terminalsCard">Terminals</a><a href="#notamCard">NOTAMs</a><a href="#windsCard">Winds</a><a href="#hazardsCard">Advisories</a><a href="#rawCard">PIREPs/METARs</a>
       </nav>
       <div id="verdict" class="card verdict"></div>
+      <div class="card" id="audioCard"><h2>Audio briefing</h2><div id="audio"></div></div>
       <div class="card" id="mapCard">
         <div class="maphead"><h2>Surface analysis map</h2><div id="mapModes" class="modes"></div></div>
         <div id="mapTimeWrap" class="timebar" hidden><input type="range" id="mapTime" min="0" max="100" value="0" aria-label="Time during flight"><span id="mapTimeLabel"></span></div>
@@ -156,6 +157,7 @@
   <script src="pdf.js"></script>
   <script src="notam.js"></script>
   <script src="simradar.js"></script>
+  <script src="audio.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
