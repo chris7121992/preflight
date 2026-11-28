@@ -1122,7 +1122,7 @@ async function buildBriefing(plan, input) {
   if (meta) {
     dataAsOf = meta.generatedAt;
     const ageMin = Math.round((Date.now() - Date.parse(meta.generatedAt)) / 60e3);
-    if (ageMin > 45) add('nogo', 'Data', `Weather data is ${ageMin} minutes old`, `The refresh job last ran at ${fmtZ(Date.parse(meta.generatedAt))}. Observations, PIREPs and advisories may have changed. Check that the weather refresh on your computer is running (npm run refresh), or get current weather from another source before relying on this.`, 'data');
+    if (ageMin > 45) add('nogo', 'Data', `Weather data is ${ageMin} minutes old`, `The refresh job last ran at ${fmtZ(Date.parse(meta.generatedAt))}. Observations, PIREPs and advisories may have changed. Check that the GitHub refresh job is running, or get current weather from another source before relying on this.`, 'data');
     else if (ageMin > 20) add('caution', 'Data', `Weather data is ${ageMin} minutes old`, `Last refresh ${fmtZ(Date.parse(meta.generatedAt))}. Newer METARs, PIREPs or advisories may exist.`, 'data');
   }
 
