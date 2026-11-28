@@ -7,7 +7,8 @@
     "build": "node scripts/check-pages.js && npx -y esbuild@0.25.0 engine/lib/browser.js --bundle --format=iife --target=es2020 --outfile=public/engine.js --log-level=warning",
     "snapshot": "node scripts/snapshot.js",
     "start": "npm run build && node scripts/snapshot.js && node server.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/*.test.js",
+    "refresh": "node scripts/local-refresh.js"
   },
   "engines": {
     "node": ">=18"
